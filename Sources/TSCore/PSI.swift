@@ -158,6 +158,8 @@ public struct ElementaryStreamInfo: Equatable, Sendable {
     public var isAudio: Bool { [0x03, 0x04, 0x0F, 0x11].contains(streamType) }
     /// ARIB caption / superimpose (private PES with data_component 0x0008).
     public var isCaption: Bool { streamType == 0x06 && (componentTag.map { (0x30...0x37).contains($0) } ?? false) }
+    /// ARIB superimpose (文字スーパー), component_tag 0x38–0x3F.
+    public var isSuperimpose: Bool { streamType == 0x06 && (componentTag.map { (0x38...0x3F).contains($0) } ?? false) }
 
     public var codecName: String {
         switch streamType {

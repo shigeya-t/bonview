@@ -15,8 +15,13 @@ struct ContentView: View {
                     VideoView(displayLayer: model.player.presenter.displayLayer,
                               onLayout: { [model] in model.videoHostDidLayout($0) })
                     if model.showCaptions {
-                        CaptionOverlay(lines: model.captionLines, videoSize: model.nativeVideoSize)
+                        switch model.captionStyle {
+                        case .broadcast: CaptionPlaneView(frame: model.captionFrame, videoSize: model.nativeVideoSize)
+                        case .simple: CaptionOverlay(lines: model.captionFrame.lines, videoSize: model.nativeVideoSize)
+                        }
                     }
+                    // Superimpose (emergency / news flashes) is shown regardless of the caption setting.
+                    CaptionPlaneView(frame: model.superimposeFrame, videoSize: model.nativeVideoSize)
                     overlay
                 }
                 .frame(minWidth: 320, minHeight: 180)

@@ -5,7 +5,8 @@ ffmpeg makes the A/V (MPEG-2 1440x1080i + AAC); this script then replaces ffmpeg
 adds EIT present/following and TOT, with names encoded as ARIB STD-B24 8-unit strings, so the
 demo shows a station name, programme titles and a broadcast clock. Used for screenshots and for
 trying BonView with scripts/mock_bdp_server.py without a tuner. With --captions it also adds an
-ARIB caption stream (component_tag 0x30) with a numbered line every two seconds.
+ARIB caption stream (component_tag 0x30) with a numbered line every two seconds — positioned like
+a broadcast (960×540 plane), with colour, ruby and a DRCS glyph — plus a superimpose (0x38).
 
     scripts/make_demo_ts.py out.ts --sid 1024 --name "デモテレビ" \\
         --title "ニュース" --text "番組の説明" --next "天気予報" --start 2026-11-13T19:00 --minutes 60
@@ -117,9 +118,12 @@ def crc16_ccitt(data: bytes) -> int:
 
 
 def caption_pes(group_id: int, data: bytes, pts: int) -> bytes:
-    """Synchronized caption PES (stream_id 0xBD) with one data group."""
+    """Synchronized caption PES (stream_id 0xBD) with one data group; pts None → asynchronous PES (0xBF)."""
     group = bytes([group_id << 2, 0, 0, len(data) >> 8, len(data) & 0xFF]) + data
     group += crc16_ccitt(group).to_bytes(2, "big")
+    if pts is None:
+        payload = b"\x81\xFF\xF0" + group
+        return b"\x00\x00\x01\xBF" + len(payload).to_bytes(2, "big") + payload
     payload = b"\x80\xFF\xF0" + group
     p = bytes([0x21 | ((pts >> 29) & 0x0E), (pts >> 22) & 0xFF, ((pts >> 14) & 0xFE) | 1,
                (pts >> 7) & 0xFF, ((pts << 1) & 0xFE) | 1])
@@ -127,22 +131,71 @@ def caption_pes(group_id: int, data: bytes, pts: int) -> bytes:
     return b"\x00\x00\x01\xBD" + len(body).to_bytes(2, "big") + body
 
 
-def caption_units(body: bytes) -> bytes:
-    unit = b"\x1F\x20" + len(body).to_bytes(3, "big") + body
-    return len(unit).to_bytes(3, "big") + unit
+def caption_units(body: bytes, drcs: bytes = b"") -> bytes:
+    units = b""
+    if drcs:
+        units += b"\x1F\x30" + len(drcs).to_bytes(3, "big") + drcs
+    units += b"\x1F\x20" + len(body).to_bytes(3, "big") + body
+    return len(units).to_bytes(3, "big") + units
 
 
 def caption_management() -> bytes:
-    # TMD free, one language: tag 0, DMF 0b1010, "jpn", format/TCS/rollup 0; no data units.
-    return bytes([0x3F, 1, 0x1A]) + b"jpn" + b"\x00" + b"\x00\x00\x00"
+    # TMD free, one language: tag 0, DMF 0b1010, "jpn", format 7 (960×540 horizontal); no data units.
+    return bytes([0x3F, 1, 0x1A]) + b"jpn" + b"\x70" + b"\x00\x00\x00"
 
 
-def caption_statement(lines: list) -> bytes:
-    """CS, then each line at APS(row, 6) from row 13 upwards (bottom aligned)."""
-    body = bytearray(b"\x0C")
-    for n, line in enumerate(lines):
-        body += bytes([0x1C, 0x40 + 14 - len(lines) + n, 0x40 + 6, 0x0F]) + arib(line)  # LS0: arib() starts in G0
-    return b"\x3F" + caption_units(bytes(body))
+def csi(params: str, final: int) -> bytes:
+    return b"\x9B" + params.encode() + bytes([0x20, final])
+
+
+# Display area like HD broadcasts: 620×480 at (170, 30), 36×36 characters, cells 40×60.
+CAPTION_HEADER = (csi("7", 0x53) + csi("620;480", 0x56) + csi("170;30", 0x5F)
+                  + csi("36;36", 0x57) + csi("4", 0x58) + csi("24", 0x59))
+
+# DRCS-1 0x21: a 16×16 two-level musical note, sent with every statement that uses it.
+NOTE = [
+    "0000000111111100", "0000000111111111", "0000000110000011", "0000000110000011",
+    "0000000110000011", "0000000110000011", "0000000110000011", "0000000110000011",
+    "0000000110000011", "0000000110000011", "0011111110001111", "0111111110011111",
+    "0111111110011111", "0011111100001110", "0000000000000000", "0000000000000000",
+]
+
+
+def drcs_note() -> bytes:
+    bits = "".join(NOTE)
+    pattern = bytes(int(bits[i:i + 8], 2) for i in range(0, len(bits), 8))
+    return bytes([1, 0x41, 0x21, 1, 0x00, 0, 16, 16]) + pattern
+
+
+def acps(x: int, y: int) -> bytes:
+    return csi(f"{x};{y}", 0x61)
+
+
+def caption_statement(k: int) -> bytes:
+    """Bottom two rows of the area, centred. Odd k: ruby over 字幕 and a yellow second line;
+    even k: a DRCS note after the text."""
+    body = bytearray(b"\x0C" + CAPTION_HEADER)
+    line1 = f"字幕のテスト {k}"
+    w = 40 * len(line1) + (40 if k % 2 == 0 else 0)
+    x = 170 + (620 - w) // 2
+    if k % 2:
+        line2 = "二行目は黄色で表示します"
+        x2 = 170 + (620 - 40 * len(line2)) // 2
+        # Ruby (SSZ, 20×30 cells) above 字幕, then the two lines (lower-left reference points).
+        body += acps(x + 10, 407) + b"\x88\x0F" + arib("じまく") + b"\x8A"
+        body += acps(x, 449) + b"\x0F" + arib(line1)
+        body += acps(x2, 509) + b"\x83\x0F" + arib(line2) + b"\x87"
+    else:
+        body += acps(x, 509) + b"\x0F" + arib(line1)
+        body += b"\x1B\x28\x20\x41\x0F\x21"  # G0 = DRCS-1, LS0, note
+    return b"\x3F" + caption_units(bytes(body), drcs_note() if k % 2 == 0 else b"")
+
+
+def superimpose_statement(text: str) -> bytes:
+    """Top-left banner: half-opacity black background (palette 4), white text."""
+    body = (b"\x0C" + CAPTION_HEADER + csi("960;540", 0x56) + csi("0;0", 0x5F) + acps(40, 80)
+            + b"\x90\x20\x44\x90\x50\x90\x20\x40\x87\x0F" + arib(text))
+    return b"\x3F" + caption_units(body)
 
 
 def first_pts(src: bytes, pid: int) -> int:
@@ -157,11 +210,12 @@ def first_pts(src: bytes, pid: int) -> int:
     raise ValueError(f"no PTS on PID {pid:#x}")
 
 
-def pmt_with_caption(sec: bytes, caption_pid: int) -> bytes:
-    """Re-encode ffmpeg's PMT with an extra caption ES (stream_type 0x06, component_tag 0x30)."""
+def pmt_with_caption(sec: bytes, caption_pid: int, superimpose_pid: int) -> bytes:
+    """Re-encode ffmpeg's PMT with caption (component_tag 0x30) and superimpose (0x38) ES."""
     length = ((sec[1] & 0x0F) << 8) | sec[2]
     body = sec[8:3 + length - 4]  # PCR PID … ES loop
     es = bytes([0x06, 0xE0 | (caption_pid >> 8), caption_pid & 0xFF, 0xF0, 0x03, 0x52, 0x01, 0x30])
+    es += bytes([0x06, 0xE0 | (superimpose_pid >> 8), superimpose_pid & 0xFF, 0xF0, 0x03, 0x52, 0x01, 0x38])
     return section(0x02, (sec[3] << 8) | sec[4], body + es)
 
 
@@ -229,15 +283,18 @@ def main():
 
     pk = Packetizer()
     n = len(src) // TS
-    caption_pid = 0x130
+    caption_pid, superimpose_pid = 0x130, 0x138
     captions = {}  # packet index → caption PES packets, muxed ~1 s ahead of their PTS
     if a.captions:
         base = first_pts(src, 0x100)
         for k in range(1, a.seconds // 2):
-            lines = [f"字幕のテスト {k}"] + (["二行目も表示されます"] if k % 2 else [])
-            pes = caption_pes(1, caption_statement(lines), (base + k * 2 * 90000) & ((1 << 33) - 1))
+            pes = caption_pes(1, caption_statement(k), (base + k * 2 * 90000) & ((1 << 33) - 1))
             at = max(0, int(n * (k * 2 - 1) / a.seconds))
-            captions.setdefault(at, []).append(pes)
+            captions.setdefault(at, []).append((caption_pid, pes))
+        # Superimpose: shown at once (asynchronous PES), cleared a few seconds later.
+        for t, text in ((4, "ニュース速報　これは文字スーパーのテストです"), (min(9, a.seconds - 1), None)):
+            data = superimpose_statement(text) if text else b"\x3F" + caption_units(b"\x0C")
+            captions.setdefault(int(n * t / a.seconds), []).append((superimpose_pid, caption_pes(1, data, None)))
     out = bytearray()
     every = max(1, n // (a.seconds * 4))  # SI about 4×/s
     end = start + dt.timedelta(minutes=a.minutes)
@@ -247,7 +304,7 @@ def main():
         if pid == 0x11:
             continue  # replaced by our SDT
         if a.captions and pid == 0x1000 and p[1] & 0x40:
-            for q in pk.packets(0x1000, pmt_with_caption(p[5:], caption_pid)):
+            for q in pk.packets(0x1000, pmt_with_caption(p[5:], caption_pid, superimpose_pid)):
                 out += q
             continue
         if i % every == 0:
@@ -269,8 +326,8 @@ def main():
                     continue
                 for q in pk.packets(pid2, sec):
                     out += q
-        for pes in captions.pop(i, []):
-            for q in pk.pes(caption_pid, pes):
+        for pid2, pes in captions.pop(i, []):
+            for q in pk.pes(pid2, pes):
                 out += q
         out += p
     open(a.out, "wb").write(out)

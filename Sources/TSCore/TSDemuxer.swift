@@ -22,6 +22,8 @@ public struct StreamSelection: Equatable, Sendable {
     public var audioStreams: [ElementaryStreamInfo]
     /// ARIB caption ES (component_tag 0x30 preferred).
     public var caption: ElementaryStreamInfo? = nil
+    /// ARIB superimpose ES (component_tag 0x38 preferred).
+    public var superimpose: ElementaryStreamInfo? = nil
 }
 
 public struct DemuxStats: Sendable {
@@ -39,7 +41,7 @@ public struct DemuxStats: Sendable {
 ///
 /// Not thread-safe; drive it from one queue.
 public final class TSDemuxer {
-    public enum Track: Sendable { case video, audio, caption }
+    public enum Track: Sendable { case video, audio, caption, superimpose }
 
     public var onServicesChanged: (([ServiceInfo]) -> Void)?
     public var onSelectionChanged: ((StreamSelection?) -> Void)?
@@ -143,7 +145,7 @@ public final class TSDemuxer {
         if p.scramblingControl != 0 {
             if counting {
                 stats.scrambledPackets += 1
-                if pes[pid] != nil, pid != selection?.caption?.pid { stats.scrambledSelectedPackets += 1 }
+                if pes[pid] != nil, pid != selection?.caption?.pid, pid != selection?.superimpose?.pid { stats.scrambledSelectedPackets += 1 }
             }
             return
         }
@@ -161,6 +163,7 @@ public final class TSDemuxer {
             if let v = sel.video, v.pid == pid { track = .video; info = v }
             else if let a = sel.audio, a.pid == pid { track = .audio; info = a }
             else if let c = sel.caption, c.pid == pid { track = .caption; info = c }
+            else if let c = sel.superimpose, c.pid == pid { track = .superimpose; info = c }
             else { return }
             asm.push(payload, unitStart: p.payloadUnitStart) { onPES?(track, info, $0) }
             pes[pid] = asm
@@ -256,7 +259,9 @@ public final class TSDemuxer {
                                   audio: audios.indices.contains(audioIndex) ? audios[audioIndex] : audios.first,
                                   audioStreams: audios,
                                   caption: svc.streams.first { $0.isCaption && $0.componentTag == 0x30 }
-                                      ?? svc.streams.first(where: \.isCaption))
+                                      ?? svc.streams.first(where: \.isCaption),
+                                  superimpose: svc.streams.first { $0.isSuperimpose && $0.componentTag == 0x38 }
+                                      ?? svc.streams.first(where: \.isSuperimpose))
         }
         guard new != selection else { return }
         let serviceChanged = new?.serviceID != selection?.serviceID
@@ -265,6 +270,7 @@ public final class TSDemuxer {
         if let v = new?.video { pes[v.pid] = PESAssembler() }
         if let a = new?.audio { pes[a.pid] = PESAssembler() }
         if let c = new?.caption { pes[c.pid] = PESAssembler() }
+        if let c = new?.superimpose { pes[c.pid] = PESAssembler() }
         if serviceChanged {
             presentEvent = nil
             followingEvent = nil

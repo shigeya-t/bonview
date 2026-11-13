@@ -99,6 +99,19 @@ struct AppCommands: Commands {
         CommandGroup(after: .sidebar) {
             Button(model.showCaptions ? "字幕を隠す" : "字幕を表示") { model.showCaptions.toggle() }
                 .keyboardShortcut("c", modifiers: [.command, .option])
+            Menu("字幕") {
+                Picker("表示方法", selection: Binding(get: { model.captionStyle }, set: { model.captionStyle = $0 })) {
+                    ForEach(CaptionStyle.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+                if model.captionLanguages.count > 1 {
+                    Divider()
+                    Picker("言語", selection: Binding(get: { model.captionLanguageIndex }, set: { model.captionLanguageIndex = $0 })) {
+                        ForEach(Array(model.captionLanguages.enumerated()), id: \.offset) { i, l in Text(l.displayName).tag(i) }
+                    }
+                    .pickerStyle(.inline)
+                }
+            }
             Button(model.showPanel ? "パネルを隠す" : "パネルを表示") { model.showPanel.toggle() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
         }

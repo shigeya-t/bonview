@@ -9,12 +9,12 @@ import Foundation
 public enum ARIBString {
     enum Charset: Equatable {
         case kanji, alnum, hiragana, katakana, jisKatakana, symbols, jisKanji1, jisKanji2
-        case mosaic, drcs(Int), macro, unknown(Int)
+        case mosaic, drcs(Int, UInt8), macro, unknown(Int)
 
         var bytes: Int {
             switch self {
             case .kanji, .symbols, .jisKanji1, .jisKanji2: return 2
-            case .drcs(let n), .unknown(let n): return n
+            case .drcs(let n, _), .unknown(let n): return n
             default: return 1
             }
         }
@@ -42,19 +42,29 @@ public enum ARIBString {
 
     /// Caption-relevant control functions (ARIB STD-B24 vol.1 part 2, 7.2.5). Others are skipped.
     enum Control: Equatable {
-        case clearScreen                // CS
-        case newLine                    // APR
-        case down, up, back, forward    // APD, APU, APB, APF
+        case clearScreen                     // CS
+        case newLine                         // APR
+        case down, up, back                  // APD, APU, APB
+        case forward(Int)                    // APF, PAPF
         case position(row: Int, column: Int) // APS
-        case dotPosition(x: Int, y: Int)     // CSI ACPS
-        case cancelLine                 // CAN
-        case size(CharacterSize)        // SSZ / MSZ / NSZ
+        case cancelLine                      // CAN
+        case size(CharacterSize)             // SSZ / MSZ / NSZ / SZX
+        case foreground(Int)                 // BKF…WHF, COL 0x4n (index within the palette)
+        case background(Int)                 // COL 0x5n
+        case palette(Int)                    // COL 0x20 P
+        case underline(Bool)                 // STL / SPL
+        case enclosure(Int)                  // HLC
+        case repeatNext(Int)                 // RPC (0 = to the end of the line)
+        case csi(final: UInt8, params: [Int])
     }
 
-    enum CharacterSize: Equatable { case small, medium, normal }
+    enum CharacterSize: Equatable { case small, medium, normal, tiny, doubleHeight, doubleWidth, doubleBoth }
 
     enum Token: Equatable {
+        /// One character cell (captions) or a run of text.
         case text(String)
+        /// DRCS character: 1-byte sets → (F << 8) | c (F = 0x41…0x4F); DRCS-0 → c1 << 8 | c2.
+        case drcs(UInt16)
         case control(Control)
     }
 
@@ -93,6 +103,7 @@ public enum ARIBString {
             while i < b.count {
                 let c = b[i]
                 if captionMode, let n = captionControl(b, i) { i += n; continue }
+                defer { if captionMode && !out.isEmpty { tokens.append(.text(out)); out = "" } } // one token per cell
                 switch c {
                 case 0x0F: gl = 0; i += 1           // LS0
                 case 0x0E: gl = 1; i += 1           // LS1
@@ -137,7 +148,7 @@ public enum ARIBString {
                 if b[i] == 0x20 {                                   // DRCS
                     i += 1
                     guard i < b.count else { return i }
-                    g[n] = b[i] == 0x70 ? .macro : .drcs(1)
+                    g[n] = b[i] == 0x70 ? .macro : .drcs(1, b[i])
                     return i + 1
                 }
                 g[n] = Charset.graphic(b[i], twoByte: false)
@@ -154,7 +165,7 @@ public enum ARIBString {
                 if b[i] == 0x20 {
                     i += 1
                     guard i < b.count else { return i }
-                    g[n] = .drcs(2)
+                    g[n] = .drcs(2, b[i])
                     return i + 1
                 }
                 g[n] = Charset.graphic(b[i], twoByte: true)
@@ -167,26 +178,56 @@ public enum ARIBString {
         /// Handles caption control codes; returns the consumed length, or nil if `b[i]` is not one.
         mutating func captionControl(_ b: [UInt8], _ i: Int) -> Int? {
             func param(_ k: Int) -> Int? { i + k < b.count ? Int(b[i + k] & 0x3F) : nil }
-            switch b[i] {
+            func raw(_ k: Int) -> UInt8? { i + k < b.count ? b[i + k] : nil }
+            let c = b[i]
+            switch c {
             case 0x0C: control(.clearScreen); return 1
             case 0x0D: control(.newLine); return 1
             case 0x0A: control(.down); return 1
             case 0x0B: control(.up); return 1
             case 0x08: control(.back); return 1
-            case 0x09: control(.forward); return 1
+            case 0x09: control(.forward(1)); return 1
+            case 0x16: if let n = param(1) { control(.forward(n)) }; return 2
             case 0x18: control(.cancelLine); return 1
             case 0x1C:
-                if let r = param(1), let c = param(2) { control(.position(row: r, column: c)) }
+                if let r = param(1), let col = param(2) { control(.position(row: r, column: col)) }
                 return 3
+            case 0x80...0x87: control(.foreground(Int(c - 0x80))); return 1
             case 0x88: control(.size(.small)); return 1
             case 0x89: control(.size(.medium)); return 1
             case 0x8A: control(.size(.normal)); return 1
+            case 0x8B:
+                switch raw(1) {
+                case 0x60: control(.size(.tiny))
+                case 0x41: control(.size(.doubleHeight))
+                case 0x44: control(.size(.doubleWidth))
+                case 0x45: control(.size(.doubleBoth))
+                default: control(.size(.normal))
+                }
+                return 2
+            case 0x90: // COL
+                guard let p = raw(1) else { return 1 }
+                if p == 0x20 {
+                    if let q = raw(2) { control(.palette(Int(q & 0x0F))) }
+                    return 3
+                }
+                switch p & 0xF0 {
+                case 0x40: control(.foreground(Int(p & 0x0F)))
+                case 0x50: control(.background(Int(p & 0x0F)))
+                default: break // half-intensity colours (gradation): not used for rendering
+                }
+                return 2
+            case 0x97: if let p = raw(1) { control(.enclosure(Int(p & 0x0F))) }; return 2
+            case 0x98: if let n = param(1) { control(.repeatNext(n)) }; return 2
+            case 0x99: control(.underline(false)); return 1
+            case 0x9A: control(.underline(true)); return 1
             case 0x9B:
                 let n = c1Length(b, i)
-                // CSI P1 ; P2 0x20 F  — ACPS (F = 0x61) sets the active position in dots.
-                if i + n - 1 < b.count, b[i + n - 1] == 0x61 {
-                    let params = String(decoding: b[(i + 1)..<(i + n - 2)], as: UTF8.self).split(separator: ";").compactMap { Int($0) }
-                    if params.count >= 2 { control(.dotPosition(x: params[0], y: params[1])) }
+                // CSI P1 ; P2 … 0x20 F
+                if i + n - 1 < b.count, n >= 3 {
+                    let params = String(decoding: b[(i + 1)..<(i + n - 2)], as: UTF8.self)
+                        .split(separator: ";", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
+                    control(.csi(final: b[i + n - 1], params: params))
                 }
                 return n
             default: return nil
@@ -251,7 +292,17 @@ public enum ARIBString {
             case .mosaic:
                 out += " "
                 return 1
-            case .drcs(let n), .unknown(let n):
+            case .drcs(let n, let f):
+                if captionMode {
+                    let code = n == 1 ? UInt16(f) << 8 | UInt16(c1)
+                        : UInt16(c1) << 8 | UInt16(i + 1 < b.count ? b[i + 1] & mask : 0)
+                    if !out.isEmpty { tokens.append(.text(out)); out = "" }
+                    tokens.append(.drcs(code))
+                } else {
+                    out += "〓"
+                }
+                return n
+            case .unknown(let n):
                 out += "〓"
                 return n
             case .macro:

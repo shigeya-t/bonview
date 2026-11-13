@@ -133,3 +133,124 @@ enum CaptionBuilder {
         #expect(dec.screen.lines == ["字幕"])
     }
 }
+
+@Suite struct CaptionLayoutTests {
+    static func csi(_ params: String, _ final: UInt8) -> [UInt8] { [0x9B] + Array(params.utf8) + [0x20, final] }
+
+    /// Typical HD caption header: SWF 7 (960×540), SDF 620×480 at SDP (170,30), 36×36 chars, SHS 4, SVS 24.
+    static let header: [UInt8] = csi("7", 0x53) + csi("620;480", 0x56) + csi("170;30", 0x5F)
+        + csi("36;36", 0x57) + csi("4", 0x58) + csi("24", 0x59)
+
+    @Test func apsPlacesCellsInDisplayArea() throws {
+        var screen = CaptionScreen()
+        screen.apply(Self.header + [0x1C, 0x40 + 2, 0x40 + 3] + CaptionBuilder.kanji("字幕"))
+        let g = screen.frame.glyphs
+        #expect(g.count == 2)
+        let first = try #require(g.first)
+        #expect(first.x == 170 + 3 * 40)
+        #expect(first.y == 30 + 2 * 60)
+        #expect(first.width == 40 && first.height == 60)
+        #expect(first.charWidth == 36 && first.charHeight == 36)
+        #expect(g[1].x == first.x + 40)
+        #expect(screen.frame.planeWidth == 960)
+    }
+
+    @Test func acpsIsLowerLeftOfCell() throws {
+        var screen = CaptionScreen()
+        screen.apply(Self.header + Self.csi("250;479", 0x61) + CaptionBuilder.kanji("あ"))
+        let g = try #require(screen.frame.glyphs.first)
+        #expect(g.x == 250 && g.y == 479 - 60)
+    }
+
+    @Test func coloursAndPalette() throws {
+        var screen = CaptionScreen()
+        // YLF (palette 0), COL palette 4 (the half-opacity copy of 0–15), COL background 0.
+        // Colours are resolved against the palette in effect when they are designated.
+        screen.apply([0x83, 0x90, 0x20, 0x44, 0x90, 0x50] + CaptionBuilder.kanji("色"))
+        let g = try #require(screen.frame.glyphs.first)
+        #expect(g.foreground == CaptionColor(255, 255, 0))
+        #expect(g.background == CaptionColor(0, 0, 0, 128))
+    }
+
+    @Test func sizesAndRuby() throws {
+        var screen = CaptionScreen()
+        // MSZ "A", SSZ "る", NSZ "字"
+        screen.apply(Self.header + [0x1C, 0x41, 0x40, 0x89, 0x0E, 0x41, 0x88, 0x0F] + CaptionBuilder.kanji("る")
+                     + [0x8A] + CaptionBuilder.kanji("字"))
+        let g = screen.frame.glyphs
+        #expect(g.map(\.width) == [20, 20, 40])
+        #expect(g.map(\.height) == [60, 30, 60])
+        #expect(g.map(\.isSmall) == [false, true, false])
+        #expect(screen.lines == ["A字"])
+    }
+
+    @Test func wrapsAtAreaEdge() {
+        var screen = CaptionScreen()
+        // Area 80 dots wide → 2 cells per row.
+        screen.apply(Self.csi("80;480", 0x56) + CaptionBuilder.kanji("一二三"))
+        #expect(screen.frame.glyphs.map(\.y) == [0, 0, 60])
+        #expect(screen.lines == ["一二", "三"])
+    }
+
+    @Test func repeatCharacter() {
+        var screen = CaptionScreen()
+        screen.apply([0x98, 0x43] + CaptionBuilder.kanji("ー"))
+        #expect(screen.lines == ["ーーー"])
+    }
+
+    @Test func drcsPattern() throws {
+        // 1-byte DRCS set 1 (F = 0x41), code 0x21: 2-level 4×2 pattern 1001 0110.
+        let unit: [UInt8] = [1, 0x41, 0x21, 1, 0x00, 0, 4, 2, 0b1001_0110]
+        let patterns = CaptionDRCS.parseUnit(unit)
+        let p = try #require(patterns[0x4121])
+        #expect(p.width == 4 && p.height == 2)
+        #expect(p.pixels == [1, 0, 0, 1, 0, 1, 1, 0])
+
+        var dec = CaptionDecoder()
+        // ESC ( SP A → G0 = DRCS-1, then 0x21.
+        let body: [UInt8] = [0x0C, 0x1B, 0x28, 0x20, 0x41, 0x21]
+        let group = CaptionBuilder.pesPayload(groupID: 1, groupData: [0x3F] + CaptionBuilder.loop([
+            CaptionBuilder.unit(unit, parameter: 0x30), CaptionBuilder.unit(body)]))
+        let shown = dec.feed(group)
+        #expect(shown)
+        #expect(dec.frame.glyphs.first?.content == .drcs(p))
+    }
+
+    @Test func managementFormatSetsPlane() {
+        var dec = CaptionDecoder()
+        // Format 5 = 1920×1080 horizontal.
+        var d: [UInt8] = [0x3F, 1, 0x1A] + Array("jpn".utf8) + [0x50]
+        d += CaptionBuilder.loop([])
+        dec.feed(CaptionBuilder.pesPayload(groupID: 0, groupData: d))
+        dec.feed(CaptionBuilder.statement(CaptionBuilder.kanji("大")))
+        #expect(dec.frame.planeWidth == 1920)
+        #expect(dec.frame.glyphs.first?.width == 80)
+    }
+
+    @Test func clut() {
+        #expect(CaptionColor.clut.count == 128)
+        #expect(CaptionColor.clut[8].isTransparent)
+        #expect(CaptionColor.clut[7] == CaptionColor(255, 255, 255))
+        #expect(CaptionColor.clut[64] == CaptionColor(0, 0, 0, 128))
+    }
+
+    @Test func demuxerRoutesSuperimpose() {
+        var cc0: UInt8 = 0, cc1: UInt8 = 0, ccs: UInt8 = 0
+        var ts: [UInt8] = []
+        ts += TSBuilder.packets(pid: 0, payload: TSBuilder.section(tableID: 0, ext: 1, body: [0x04, 0x00, 0xE1, 0xF0]), isSection: true, cc: &cc0)
+        let pmtBody: [UInt8] = [0xE1, 0x00, 0xF0, 0x00,
+                                0x02, 0xE1, 0x00, 0xF0, 0x03, 0x52, 0x01, 0x00,
+                                0x06, 0xE1, 0x38, 0xF0, 0x03, 0x52, 0x01, 0x38]
+        ts += TSBuilder.packets(pid: 0x01F0, payload: TSBuilder.section(tableID: 2, ext: 0x0400, body: pmtBody), isSection: true, cc: &cc1)
+        ts += TSBuilder.packets(pid: 0x0138, payload: TSBuilder.pes(streamID: 0xBD, pts: 1, payload: CaptionBuilder.statement(CaptionBuilder.kanji("速報"))), isSection: false, cc: &ccs)
+        let demux = TSDemuxer()
+        var selection: StreamSelection?
+        var tracks: [TSDemuxer.Track] = []
+        demux.onSelectionChanged = { selection = $0 }
+        demux.onPES = { t, _, _ in tracks.append(t) }
+        demux.feed(Data(ts))
+        #expect(selection?.caption == nil)
+        #expect(selection?.superimpose?.pid == 0x0138)
+        #expect(tracks == [.superimpose])
+    }
+}
