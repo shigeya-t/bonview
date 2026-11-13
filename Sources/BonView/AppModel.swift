@@ -533,6 +533,9 @@ final class AppModel {
 
     /// How large the picture is shown relative to its native size (rounded %), for the toolbar.
     var videoScalePercent: Int?
+    /// Whether the main window is in full-screen mode (updated on layout, which runs after every
+    /// full-screen transition).
+    var isFullScreen = false
     @ObservationIgnored private weak var videoHost: VideoHostView?
 
     /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
@@ -552,6 +555,12 @@ final class AppModel {
         let fit = min(host.bounds.width / src.width, host.bounds.height / src.height)
         let pct = Int((fit * 100).rounded())
         if pct != videoScalePercent { videoScalePercent = pct }
+        let full = host.window?.styleMask.contains(.fullScreen) ?? false
+        if full != isFullScreen { isFullScreen = full }
+    }
+
+    func toggleFullScreen() {
+        videoHost?.window?.toggleFullScreen(nil)
     }
 
     /// Resize the window so the picture is shown at `scale` of its native size (1 px = 1 pt,
