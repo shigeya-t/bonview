@@ -60,6 +60,7 @@ struct ContentView: View {
                     Label("消音", systemImage: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 }
                 Slider(value: $model.volume, in: 0...1).frame(width: 90)
+                    .padding(.trailing, 10)
                 Menu {
                     ForEach(AppModel.videoScales, id: \.self) { scale in
                         Button {
@@ -70,6 +71,17 @@ struct ContentView: View {
                             } else {
                                 Text(scale.label)
                             }
+                        }
+                        .disabled(model.isFullScreen)
+                    }
+                    Divider()
+                    Button {
+                        model.toggleFullScreen()
+                    } label: {
+                        if model.isFullScreen {
+                            Label("全画面", systemImage: "checkmark")
+                        } else {
+                            Text("全画面")
                         }
                     }
                 } label: {
