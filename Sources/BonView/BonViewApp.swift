@@ -31,6 +31,13 @@ struct BonViewApp: App {
         .defaultSize(width: 1240, height: 600)
         .commands { AppCommands(model: model) }
 
+        Window("番組表", id: "guide") {
+            ProgramGuideView()
+                .environment(model)
+                .frame(minWidth: 480, minHeight: 300)
+        }
+        .defaultSize(width: 1100, height: 720)
+
         Settings {
             SettingsView().environment(model)
         }
@@ -57,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct AppCommands: Commands {
     let model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -75,6 +83,12 @@ struct AppCommands: Commands {
             Button("次のチャンネル") { model.stepChannel(1) }.keyboardShortcut(.downArrow, modifiers: .command)
             Button("チャンネルスキャン…") { model.showScanSheet = true }
                 .disabled(model.state != .connected || model.isScanning)
+            if model.isGrabbingEPG {
+                Button("番組表の取得を中止") { model.cancelEPGGrab() }
+            } else {
+                Button("番組表を取得") { model.startEPGGrab() }
+                    .disabled(model.state != .connected || model.isScanning || model.scannedChannels.isEmpty)
+            }
             Divider()
             Menu("BonDriver") {
                 ForEach(model.profiles) { p in
@@ -119,6 +133,8 @@ struct AppCommands: Commands {
             }
             Button(model.showPanel ? "パネルを隠す" : "パネルを表示") { model.showPanel.toggle() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
+            Button("番組表") { openWindow(id: "guide") }
+                .keyboardShortcut("e")
         }
     }
 

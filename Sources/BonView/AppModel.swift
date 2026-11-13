@@ -78,10 +78,12 @@ final class AppModel {
         scannedEntries.filter { !hiddenEntries.contains($0.id) }
     }
 
-    /// Programme on air on a scanned service, if its EIT has been seen.
+    /// Programme on air on a scanned service, from EIT p/f seen while watching, else the programme guide.
     func currentProgram(_ e: ScannedEntry) -> EventInfo? {
-        programCache.currentEvent(originalNetworkID: e.channel.originalNetworkID, transportStreamID: e.channel.transportStreamID,
-                                  serviceID: e.service.serviceID, at: broadcastTime ?? Date())
+        let now = broadcastTime ?? Date()
+        return programCache.currentEvent(originalNetworkID: e.channel.originalNetworkID, transportStreamID: e.channel.transportStreamID,
+                                         serviceID: e.service.serviceID, at: now)
+            ?? epgKey(e).flatMap { epg.event(for: $0, at: now) }
     }
 
     func isHidden(_ e: ScannedEntry) -> Bool { hiddenEntries.contains(e.id) }
@@ -119,6 +121,26 @@ final class AppModel {
     var captionLanguageIndex = 0 {
         didSet { if oldValue != captionLanguageIndex { player.selectCaptionLanguage(index: captionLanguageIndex) } }
     }
+
+    // MARK: Programme guide (see ProgramGuide.swift)
+    /// Guide data of the current profile: EIT schedule from the background grab plus whatever
+    /// the viewing stream carries.
+    var epg = EPGStore()
+    var epgGrab: EPGGrabProgress?
+    /// When the last full grab of the current profile finished.
+    var epgLastGrab: Date?
+    var epgAutoGrab = Preferences.bool("epgAutoGrab", default: false) {
+        didSet { UserDefaults.standard.set(epgAutoGrab, forKey: "epgAutoGrab") }
+    }
+    @ObservationIgnored var epgGrabber: EPGGrabber?
+    @ObservationIgnored let epgQueue = DispatchQueue(label: "bonview.epg-driver", qos: .utility)
+    /// EIT from the stream being watched (works with a single tuner, too).
+    @ObservationIgnored let passiveEPG = EPGCollector()
+    @ObservationIgnored var epgGeneration = 0
+    @ObservationIgnored var epgDirty = false
+    @ObservationIgnored var epgLastSave = Date()
+    /// TSID of the channel the background grab is reading (tuner sharing check).
+    @ObservationIgnored var epgGrabTSID: UInt16?
 
     // MARK: Audio / video options
     var volume: Double = Preferences.double("volume", default: 0.8) {
@@ -168,7 +190,7 @@ final class AppModel {
     @ObservationIgnored private let driverQueue = DispatchQueue(label: "bonview.driver", qos: .userInitiated)
     @ObservationIgnored private var fileSource: TSFileSource?
     @ObservationIgnored private var signalTimer: Timer?
-    @ObservationIgnored private var generation = 0
+    @ObservationIgnored private(set) var generation = 0
     @ObservationIgnored private let router = TSRouter()
     @ObservationIgnored private var scanner: ChannelScanner?
 
@@ -201,10 +223,13 @@ final class AppModel {
             self?.updateVideoScale()
         }
         let player = self.player
-        router.set { player.feed($0) }
+        let passive = passiveEPG
+        router.set { player.feed($0); passive.feed($0) }
 
         signalTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            guard let self, let d = self.driver else { return }
+            guard let self else { return }
+            self.epgTick()
+            guard let d = self.driver else { return }
             self.signalLevel = d.signalLevel
         }
     }
@@ -224,6 +249,7 @@ final class AppModel {
         scannedChannels = Preferences.scanResult(for: profile.id)
         channelOrder = Preferences.channelOrder(for: profile.id)
         hiddenEntries = Preferences.hiddenEntries(for: profile.id)
+        loadEPG(profile)
         let router = self.router
         driverQueue.async { [weak self] in
             do {
@@ -258,6 +284,8 @@ final class AppModel {
     func disconnect() {
         generation += 1
         cancelScan()
+        cancelEPGGrab()
+        saveEPG()
         fileSource?.stop()
         fileSource = nil
         if let d = driver {
@@ -303,6 +331,7 @@ final class AppModel {
             if case .success(.tuned) = result {
                 // Anything queued after this point belongs to the new channel.
                 player.reset()
+                self?.passiveEPG.resetStream()
                 player.selectService(preferred)
             }
             DispatchQueue.main.async {
@@ -380,7 +409,8 @@ final class AppModel {
                     }
                 }
             }
-            router.set { player.feed($0) }
+            let passive = self?.passiveEPG
+            router.set { player.feed($0); passive?.feed($0) }
             let cancelled = scanner.isCancelled
             DispatchQueue.main.async {
                 guard let self else { return }

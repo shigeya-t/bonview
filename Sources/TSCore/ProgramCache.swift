@@ -5,7 +5,7 @@ import Foundation
 /// channel list. Terrestrial TSs only carry their own services' EIT, so other channels are known
 /// once they have been tuned; BS / CS carry EIT p/f other for the whole network.
 public struct ProgramCache: Sendable {
-    public struct ServiceKey: Hashable, Sendable {
+    public struct ServiceKey: Hashable, Sendable, Codable {
         public var originalNetworkID: UInt16
         public var transportStreamID: UInt16
         public var serviceID: UInt16
