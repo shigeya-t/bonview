@@ -252,37 +252,94 @@ public struct SDT {
     }
 }
 
-// MARK: - EIT (present / following)
+// MARK: - EIT
 
-public struct EventInfo: Equatable, Sendable {
+/// One item of the extended event descriptor (e.g. "出演者" → "…").
+public struct ExtendedEventItem: Equatable, Sendable, Codable {
+    public var heading: String
+    public var text: String
+
+    public init(heading: String, text: String) {
+        self.heading = heading
+        self.text = text
+    }
+}
+
+public struct EventInfo: Equatable, Sendable, Codable {
     public var serviceID: UInt16
     public var eventID: UInt16
     public var start: Date?
     public var duration: TimeInterval?
     public var title: String
     public var text: String
+    /// Extended event descriptor items (0x4E), in broadcast order.
+    public var extended: [ExtendedEventItem] = []
+    /// content_nibble_level_1 of the first content descriptor (0x54) entry (0x0 ニュース … 0xB 福祉).
+    public var genre: UInt8? = nil
+
+    public init(serviceID: UInt16, eventID: UInt16, start: Date?, duration: TimeInterval?, title: String, text: String,
+                extended: [ExtendedEventItem] = [], genre: UInt8? = nil) {
+        self.serviceID = serviceID
+        self.eventID = eventID
+        self.start = start
+        self.duration = duration
+        self.title = title
+        self.text = text
+        self.extended = extended
+        self.genre = genre
+    }
 
     public var end: Date? {
         guard let s = start, let d = duration else { return nil }
         return s.addingTimeInterval(d)
     }
+
+    // Older stores have no `extended` / `genre`.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        serviceID = try c.decode(UInt16.self, forKey: .serviceID)
+        eventID = try c.decode(UInt16.self, forKey: .eventID)
+        start = try c.decodeIfPresent(Date.self, forKey: .start)
+        duration = try c.decodeIfPresent(TimeInterval.self, forKey: .duration)
+        title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
+        text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
+        extended = try c.decodeIfPresent([ExtendedEventItem].self, forKey: .extended) ?? []
+        genre = try c.decodeIfPresent(UInt8.self, forKey: .genre)
+    }
 }
 
+/// Event Information Table: present/following (0x4E actual, 0x4F other) and schedule
+/// (0x50–0x5F actual, 0x60–0x6F other; the upper half of each range carries extended
+/// descriptors only).
 public struct EIT {
     public var tableID: UInt8
     public var serviceID: UInt16
     public var transportStreamID: UInt16
     public var originalNetworkID: UInt16
+    public var version: UInt8
     public var sectionNumber: UInt8
+    public var lastSectionNumber: UInt8
+    /// Schedule tables: last section of this section's segment (8 sections = 3 hours).
+    public var segmentLastSectionNumber: UInt8
+    public var lastTableID: UInt8
     public var events: [EventInfo]
+
+    public var isPresentFollowing: Bool { tableID == 0x4E || tableID == 0x4F }
+    public var isSchedule: Bool { tableID >= 0x50 }
+    /// 0x50–0x57 / 0x60–0x67 (short event + content descriptors). 0x58–0x5F / 0x68–0x6F are extended.
+    public var isBasicSchedule: Bool { isSchedule && tableID & 0x08 == 0 }
 
     public init?(_ s: [UInt8]) {
         guard (0x4E...0x6F).contains(s[0]), let h = SectionHeader(s), s.count >= 18 else { return nil }
         tableID = s[0]
         serviceID = h.tableIDExtension
+        version = h.version
         transportStreamID = s.u16(8)
         originalNetworkID = s.u16(10)
         sectionNumber = h.sectionNumber
+        lastSectionNumber = h.lastSectionNumber
+        segmentLastSectionNumber = s[12]
+        lastTableID = s[13]
         events = []
         var i = 14
         let end = s.count - 4
@@ -292,17 +349,45 @@ public struct EIT {
             let dur = AribTime.duration(bcd: Array(s[(i + 7)..<(i + 10)]))
             let len = s.u12(i + 10)
             var ev = EventInfo(serviceID: serviceID, eventID: eid, start: start, duration: dur, title: "", text: "")
-            for d in Descriptor.parse(s, from: i + 12, length: len) where d.tag == 0x4D {
+            // Extended items may continue across descriptors (an item with an empty heading
+            // continues the previous one), so collect raw bytes and decode at the end.
+            var items: [(heading: [UInt8], text: [UInt8])] = []
+            for d in Descriptor.parse(s, from: i + 12, length: len) {
                 let b = Array(d.data)
-                guard b.count >= 5 else { continue }
-                let nl = Int(b[3])
-                ev.title = ARIBString.decode(b[4..<min(4 + nl, b.count)])
-                if 4 + nl < b.count {
-                    let tl = Int(b[4 + nl])
-                    let ts = 5 + nl
-                    ev.text = ARIBString.decode(b[min(ts, b.count)..<min(ts + tl, b.count)])
+                switch d.tag {
+                case 0x4D where b.count >= 5:
+                    let nl = Int(b[3])
+                    ev.title = ARIBString.decode(b[4..<min(4 + nl, b.count)])
+                    if 4 + nl < b.count {
+                        let tl = Int(b[4 + nl])
+                        let ts = 5 + nl
+                        ev.text = ARIBString.decode(b[min(ts, b.count)..<min(ts + tl, b.count)])
+                    }
+                case 0x4E where b.count >= 5:
+                    let itemsEnd = min(5 + Int(b[4]), b.count)
+                    var k = 5
+                    while k < itemsEnd {
+                        let dl = Int(b[k])
+                        let dEnd = min(k + 1 + dl, itemsEnd)
+                        let heading = Array(b[(k + 1)..<dEnd])
+                        guard dEnd < itemsEnd else { break }
+                        let il = Int(b[dEnd])
+                        let iEnd = min(dEnd + 1 + il, itemsEnd)
+                        let text = Array(b[(dEnd + 1)..<iEnd])
+                        if heading.isEmpty, !items.isEmpty {
+                            items[items.count - 1].text += text
+                        } else {
+                            items.append((heading, text))
+                        }
+                        k = iEnd
+                    }
+                case 0x54 where b.count >= 2:
+                    if ev.genre == nil { ev.genre = b[0] >> 4 }
+                default:
+                    break
                 }
             }
+            ev.extended = items.map { ExtendedEventItem(heading: ARIBString.decode($0.heading), text: ARIBString.decode($0.text)) }
             events.append(ev)
             i += 12 + len
         }
@@ -385,7 +470,7 @@ public enum TOT {
 }
 
 public enum AribTime {
-    static let jst = TimeZone(identifier: "Asia/Tokyo")!
+    public static let jst = TimeZone(identifier: "Asia/Tokyo")!
 
     @inline(__always) static func bcd(_ b: UInt8) -> Int { Int(b >> 4) * 10 + Int(b & 0x0F) }
 

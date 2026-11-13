@@ -11,10 +11,11 @@ import TSCore
 //   bdpcat -a 192.168.0.10 -d BonDriver_PT3-T.dll --space 0 --channel 3 -t 10 -o out.ts
 //   bdpcat ... -o - | ffplay -
 //   bdpcat -c BonDriver_Proxy.ini --scan [--space S]           (channel scan)
+//   bdpcat -c BonDriver_Proxy.ini --epg [--space S]            (scan, then read every channel's EIT schedule)
 
 let usage = """
 usage: bdpcat [--tunnel] [-c conf] [-a address] [-p port] -d bondriver [--lock N] [--no-b25]
-              (--list | --scan [--space S] | --space S --channel C [-t seconds] [-o file|-] [--info])
+              (--list | --scan [--space S] | --epg [--space S] | --space S --channel C [-t seconds] [-o file|-] [--info])
 """
 
 func fail(_ msg: String) -> Never {
@@ -29,7 +30,7 @@ var useTunnel = false
 var portSet = false
 var configPath: String?
 var haveDriver = false
-var list = false, info = false, scan = false
+var list = false, info = false, scan = false, epg = false
 var space: UInt32?, channel: UInt32?
 var seconds: Double = 0
 var output: String?
@@ -50,6 +51,7 @@ while !args.isEmpty {
     case "--no-b25": config.requestB25 = false
     case "--list": list = true
     case "--scan": scan = true
+    case "--epg": epg = true; scan = true
     case "--info": info = true
     case "--space": space = UInt32(next())
     case "--channel": channel = UInt32(next())
@@ -116,6 +118,34 @@ if scan {
         }
     }
     print("\(found.count) channel(s) found")
+    guard epg else { exit(0) }
+
+    let grabber = EPGGrabber()
+    client.tsHandler = { grabber.feed($0) }
+    var store = EPGStore()
+    do {
+        try grabber.grab(client, channels: found) { ev in
+            switch ev {
+            case .started(let ch, let i, let total): err.write("\r[\(i + 1)/\(total)] EPG \(ch.channelName)        ".data(using: .utf8)!)
+            case .updates(let u): store.merge(u)
+            case .skipped, .locked, .finished: break
+            }
+        }
+    } catch { fail("\(error)") }
+    err.write("\n".data(using: .utf8)!)
+    let f = DateFormatter()
+    f.dateFormat = "MM/dd HH:mm"
+    f.timeZone = TimeZone(identifier: "Asia/Tokyo")
+    for c in found {
+        for s in c.services where s.isViewable {
+            guard let key = store.key(originalNetworkID: c.originalNetworkID, transportStreamID: c.transportStreamID, serviceID: s.serviceID) else { continue }
+            let events = store.events(for: key, from: .distantPast, to: .distantFuture)
+            print("\(s.displayName) (SID \(s.serviceID)): \(events.count) events")
+            for ev in events {
+                print("    \(f.string(from: ev.start!)) \(Int(ev.duration! / 60))分  \(ev.title)")
+            }
+        }
+    }
     exit(0)
 }
 

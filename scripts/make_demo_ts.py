@@ -4,7 +4,8 @@
 ffmpeg makes the A/V (MPEG-2 1440x1080i + AAC); this script then replaces ffmpeg's SDT and
 adds EIT present/following and TOT, with names encoded as ARIB STD-B24 8-unit strings, so the
 demo shows a station name, programme titles and a broadcast clock. Used for screenshots and for
-trying BonView with scripts/mock_bdp_server.py without a tuner. With --captions it also adds an
+trying BonView with scripts/mock_bdp_server.py without a tuner. --schedule-days adds an EIT
+schedule (programme guide) with sample programmes. With --captions it also adds an
 ARIB caption stream (component_tag 0x30) with a numbered line every two seconds — positioned like
 a broadcast (960×540 plane), with colour, ruby and a DRCS glyph — plus a superimpose (0x38).
 
@@ -92,6 +93,45 @@ def eit(tsid: int, onid: int, sid: int, number: int, event_id: int, start: dt.da
     ev = event_id.to_bytes(2, "big") + mjd_bcd(start) + dur_bcd(minutes) + bytes([0x80 | (len(desc) >> 8), len(desc) & 0xFF]) + desc
     body = tsid.to_bytes(2, "big") + onid.to_bytes(2, "big") + bytes([0x01, 0x4E]) + ev
     return section(0x4E, sid, body, number=number, last=1)
+
+
+SCHEDULE_TITLES = [
+    ("朝のニュース", 0x0), ("情報ワイド", 0x2), ("連続ドラマ", 0x3), ("音楽の時間", 0x4), ("バラエティ特番", 0x5),
+    ("映画劇場", 0x6), ("アニメ", 0x7), ("ドキュメンタリー", 0x8), ("スポーツ中継", 0x1), ("天気予報", 0x0),
+]
+
+
+def schedule_event(event_id: int, start: dt.datetime, minutes: int, title: str, genre: int, text: str) -> bytes:
+    t, x = arib(title), arib(text)
+    sed = b"jpn" + bytes([len(t)]) + t + bytes([len(x)]) + x
+    head, body = arib("出演者"), arib("デモ　太郎、サンプル　花子")
+    items = bytes([len(head)]) + head + bytes([len(body)]) + body
+    eed = bytes([0x00]) + b"jpn" + bytes([len(items)]) + items + b"\x00"
+    desc = bytes([0x4D, len(sed)]) + sed + bytes([0x54, 2, genre << 4, 0xFF]) + bytes([0x4E, len(eed)]) + eed
+    return event_id.to_bytes(2, "big") + mjd_bcd(start) + dur_bcd(minutes) + bytes([0x80 | (len(desc) >> 8), len(desc) & 0xFF]) + desc
+
+
+def eit_schedule(tsid: int, onid: int, sid: int, day0: dt.datetime, days: int, seed: int) -> list:
+    """EIT schedule actual (table 0x50, days 0–3): one section per 3-hour segment, programmes of
+    30–120 minutes back to back from day0 00:00. Returns the sections."""
+    lengths = [30, 60, 60, 90, 120, 30, 60]
+    events, t, n = [], day0, 0
+    while t < day0 + dt.timedelta(days=days):
+        title, genre = SCHEDULE_TITLES[(n + seed) % len(SCHEDULE_TITLES)]
+        minutes = lengths[(n * 3 + seed) % len(lengths)]
+        events.append((0x1000 + n, t, minutes, title, genre))
+        t += dt.timedelta(minutes=minutes)
+        n += 1
+    segments = days * 8
+    out = []
+    for seg in range(segments):
+        lo = day0 + dt.timedelta(hours=3 * seg)
+        hi = lo + dt.timedelta(hours=3)
+        evs = b"".join(schedule_event(eid, st, m, f"{ti}", g, f"{st:%H:%M} からの{ti}です。")
+                       for eid, st, m, ti, g in events if lo <= st < hi)
+        body = tsid.to_bytes(2, "big") + onid.to_bytes(2, "big") + bytes([seg * 8, 0x50]) + evs
+        out.append(section(0x50, sid, body, number=seg * 8, last=(segments - 1) * 8))
+    return out
 
 
 def nit(tsid: int, onid: int, sid: int, key: int, ts_name: str) -> bytes:
@@ -264,6 +304,7 @@ def main():
     ap.add_argument("--pattern", default="testsrc2", help="ffmpeg lavfi video source (testsrc2, smptehdbars, mandelbrot…)")
     ap.add_argument("--tone", type=int, default=440)
     ap.add_argument("--captions", action="store_true", help="add an ARIB caption stream (PID 0x130)")
+    ap.add_argument("--schedule-days", type=int, default=0, help="add EIT schedule (table 0x50) for this many days (≤ 4)")
     a = ap.parse_args()
     tsid = a.tsid if a.tsid is not None else a.sid
     start = dt.datetime.fromisoformat(a.start)
@@ -297,6 +338,9 @@ def main():
             captions.setdefault(int(n * t / a.seconds), []).append((superimpose_pid, caption_pes(1, data, None)))
     out = bytearray()
     every = max(1, n // (a.seconds * 4))  # SI about 4×/s
+    day0 = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    schedule = eit_schedule(tsid, a.onid, a.sid, day0, min(a.schedule_days, 4), a.sid) if a.schedule_days else []
+    tick = 0
     end = start + dt.timedelta(minutes=a.minutes)
     for i in range(n):
         p = src[i * TS:(i + 1) * TS]
@@ -317,6 +361,10 @@ def main():
             ]
             if a.key:
                 tables.append((0x10, nit(tsid, a.onid, a.sid, a.key, a.name)))
+            if schedule:  # a few schedule sections per tick, round robin
+                for k in range(4):
+                    tables.append((0x12, schedule[(tick * 4 + k) % len(schedule)]))
+            tick += 1
             if a.captions:
                 tables.append((caption_pid, None))
             for pid2, sec in tables:

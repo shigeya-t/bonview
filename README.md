@@ -65,6 +65,10 @@ Mac 側にドライバーやカードリーダーは要りません。
   - 表示 > 字幕 で「下部にまとめて表示」（文字だけを映像の下部に表示）にも切り替えられます。複数の言語がある番組では、ここで言語を選べます。文字スーパーは字幕の設定に関係なく表示します。
 - **チャンネルスキャン**
   - 全チャンネルを順に選局し、放送のあるチャンネルだけを局名一覧にします。
+- **番組表**
+  - EIT（番組配列情報）から最大 8 日分の番組表を表示します（表示 > 番組表、⌘E）。ジャンル別の色分け、番組の詳細（出演者など）、クリックで選局ができます。
+  - 「番組表を取得」で、BonDriver サーバーに視聴とは別の接続を開き、チャンネルを順に切り替えながら全局の番組表を取得します。視聴は中断しません。空きチューナーが 1 つ必要です（取得側はチャンネルロック 0 で接続します）。視聴中のチューナーが使われたことを検出した場合は取得を中止し、元のチャンネルに戻します。
+  - 視聴中のチャンネルの番組表は、チューナーが 1 つでも自動で集めます。設定で「自動取得」を有効にすると、接続中 6 時間ごとに取得します。データはプロファイルごとに `~/Library/Application Support/BonView/EPG/` に保存します。
 - **HaijinW 版 BonDriverProxyEx のサーバー側スクランブル解除（B25）に対応**
   - 解除を要求するフラグを送ります。詳しくは [B25 について](#bondriverproxyex-を使う場合推奨) を参照してください。
 - **TS ファイルの再生**
@@ -220,6 +224,7 @@ C:\DTV\
 | 音量を上げる / 下げる | ⌘= / ⌘- |
 | 字幕の表示切替 | ⌥⌘C |
 | パネルの表示切替 | ⌥⌘P |
+| 番組表 | ⌘E |
 | 画面サイズ 20% / 25% / 33% / 50% / 67% / 75% / 100% / 150% / 200% | ⌘1 〜 ⌘9（この順） |
 | 設定 | ⌘, |
 | 全画面 | 映像をダブルクリック |
@@ -249,6 +254,7 @@ GUI を使わずに、接続やストリームを確認できます。
 ```bash
 swift run bdpcat -c BonDriver_Proxy.ini --list                          # チャンネル一覧
 swift run bdpcat -a 192.168.0.10 -d PT-T --scan --space 0               # チャンネルスキャン
+swift run bdpcat -a 192.168.0.10 -d PT-T --epg --space 0                # スキャン後、全チャンネルの番組表を取得して表示
 swift run bdpcat -a 192.168.0.10 -d PT-T --space 0 --channel 8 -t 10 --info -o out.ts
 swift run bdpcat -a 192.168.0.10 -d PT-T --space 0 --channel 8 -o - | ffplay -
 swift run bdpcat --tunnel -a 192.168.0.10 -d PT-T --list                # BonDriverTunnel
@@ -261,7 +267,7 @@ swift run bdpcat --tunnel -a 192.168.0.10 -d PT-T --list                # BonDri
 | `-a` / `-p` / `-d` | アドレス / ポート / BonDriver（Tunnel では ORIGIN） |
 | `--lock N` | チャンネルロックの優先度（0–255） |
 | `--no-b25` | B25 解除を要求しない |
-| `--list` / `--scan` | チャンネル一覧 / チャンネルスキャン |
+| `--list` / `--scan` / `--epg` | チャンネル一覧 / チャンネルスキャン / スキャンと番組表の取得 |
 | `--space S --channel C` | 選局 |
 | `-t SEC` / `-o FILE\|-` / `--info` | 受信時間 / 出力先 / 終了時にサービス・エラー数を表示 |
 
@@ -273,7 +279,7 @@ swift run bdpcat --tunnel -a 192.168.0.10 -d PT-T --list                # BonDri
 scripts/mock_bdp_server.py --port 1192 --tunnel-port 1193 --origin PT-T ch1.ts ch2.ts
 ```
 
-手元に TS ファイルがない場合は、`scripts/make_demo_ts.py` でデモ用の TS を作れます。ffmpeg のテスト映像に、ARIB 形式の局名（SDT）、番組情報（EIT 現在 / 次）、時刻（TOT）、リモコンキー番号（NIT、`--key` 指定時）を加えたものです。`--captions` を付けると、2 秒ごとに変わる字幕（位置・色・ルビ・外字の例を含む）と文字スーパーも入ります。
+手元に TS ファイルがない場合は、`scripts/make_demo_ts.py` でデモ用の TS を作れます。ffmpeg のテスト映像に、ARIB 形式の局名（SDT）、番組情報（EIT 現在 / 次）、時刻（TOT）、リモコンキー番号（NIT、`--key` 指定時）を加えたものです。`--captions` を付けると、2 秒ごとに変わる字幕（位置・色・ルビ・外字の例を含む）と文字スーパーも入ります。`--schedule-days 2` を付けると、番組表用の EIT schedule（サンプル番組、最大 4 日分）も入ります。
 
 ```bash
 scripts/make_demo_ts.py 21Ch.ts --sid 1056 --key 8 --name "デモテレビ" --title "デモ番組" --next "ニュース"   # 081
@@ -316,10 +322,10 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 | モジュール | 内容 |
 |---|---|
 | `BonDriver` | IBonDriver(2/3) 相当の Swift プロトコル、BonDriverProxy クライアント、BonDriverTunnel クライアント、設定ファイルの読み込み、Wake on LAN |
-| `TSCore` | TS パケットの分割と再同期、PSI/SI（PAT / PMT / SDT / EIT / TOT）、PES、ARIB STD-B24 文字列と字幕 |
+| `TSCore` | TS パケットの分割と再同期、PSI/SI（PAT / PMT / SDT / EIT / TOT）、番組表データ（`EPGStore`）、PES、ARIB STD-B24 文字列と字幕 |
 | `CFFmpeg` | libavcodec / libavfilter / libswresample / libswscale の薄い C ラッパー |
 | `MediaCore` | デコード（VideoToolbox / FFmpeg）、PTS の管理、`AVSampleBufferRenderSynchronizer` による表示 |
-| `ChannelScan` | チャンネルスキャン |
+| `ChannelScan` | チャンネルスキャン、番組表の取得（`EPGGrabber`） |
 | `BonView` | SwiftUI アプリ本体 |
 | `bdpcat` | コマンドラインクライアント |
 
@@ -328,7 +334,7 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 ## 今後の予定
 
 - 字幕の縦書き・点滅・スクロール、データ放送
-- 番組表（EIT schedule）と録画
+- 録画、番組表からの予約
 - リモコンやチャンネル番号キーでの選局
 - FFmpeg を同梱した配布用ビルド（現在は Homebrew の dylib にリンクしています）
 

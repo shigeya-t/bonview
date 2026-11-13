@@ -38,6 +38,13 @@ private struct PlaybackSettings: View {
                 }
                 Toggle("表示中の字幕を含める", isOn: $model.screenshotIncludesCaptions)
             }
+            Section("番組表") {
+                Toggle("接続中に番組表を自動で取得する (6時間ごと)", isOn: $model.epgAutoGrab)
+                Text("BonDriver サーバーに別の接続を開き、チャンネルを切り替えながら取得します。視聴には影響しませんが、空きチューナーが1つ必要です。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("番組表のデータを消去") { model.clearEPG() }
+                    .disabled(model.currentProfile == nil)
+            }
         }
         .formStyle(.grouped)
     }

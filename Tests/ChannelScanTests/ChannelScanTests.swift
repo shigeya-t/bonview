@@ -150,3 +150,84 @@ final class FakeDriver: BonDriver, @unchecked Sendable {
         #expect(!ScannedService(serviceID: 1, name: "", serviceType: 0x01, isOneSeg: true).isViewable)
     }
 }
+
+@Suite struct EPGGrabberTests {
+    /// EIT schedule TS built in-process (no ffmpeg): one complete one-table schedule per service.
+    static func scheduleTS(tsid: UInt16, sids: [UInt16]) -> Data {
+        var cc: UInt8 = 0
+        var out: [UInt8] = []
+        let base = Date(timeIntervalSince1970: 1_794_000_000)
+        for sid in sids {
+            for seg in 0..<3 {
+                let s = section(sid: sid, tsid: tsid, number: UInt8(seg * 8), start: base.addingTimeInterval(Double(seg) * 10800), id: UInt16(seg + 1))
+                var data = [0] + s
+                var first = true
+                while !data.isEmpty {
+                    let chunk = Array(data.prefix(184)); data.removeFirst(chunk.count)
+                    out += [0x47, (first ? 0x40 : 0), 0x12, 0x10 | cc] + chunk + [UInt8](repeating: 0xFF, count: 184 - chunk.count)
+                    cc = (cc + 1) & 0x0F
+                    first = false
+                }
+            }
+        }
+        return Data(out)
+    }
+
+    static func section(sid: UInt16, tsid: UInt16, number: UInt8, start: Date, id: UInt16) -> [UInt8] {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let c = cal.dateComponents([.year, .month, .day, .hour], from: start)
+        let day = cal.date(from: DateComponents(year: c.year, month: c.month, day: c.day))!
+        let mjd = Int((day.timeIntervalSince(cal.date(from: DateComponents(year: 1858, month: 11, day: 17))!) / 86400).rounded())
+        let hour = UInt8((c.hour! / 10) << 4 | (c.hour! % 10))
+        let title: [UInt8] = [0x0E] + Array("T\(id)".utf8)
+        let sed: [UInt8] = Array("jpn".utf8) + [UInt8(title.count)] + title + [0]
+        let desc: [UInt8] = [0x4D, UInt8(sed.count)] + sed
+        let ev: [UInt8] = [UInt8(id >> 8), UInt8(id & 0xFF), UInt8(mjd >> 8), UInt8(mjd & 0xFF), hour, 0, 0, 0x03, 0, 0,
+                           0x80, UInt8(desc.count)] + desc
+        let body: [UInt8] = [UInt8(tsid >> 8), UInt8(tsid & 0xFF), UInt8(tsid >> 8), UInt8(tsid & 0xFF), number, 0x50] + ev
+        let len = 5 + body.count + 4
+        var s: [UInt8] = [0x50, 0xF0 | UInt8(len >> 8), UInt8(len & 0xFF), UInt8(sid >> 8), UInt8(sid & 0xFF), 0xC1, number, 16] + body
+        let crc = CRC32MPEG2.checksum(s)
+        s += [UInt8(crc >> 24), UInt8((crc >> 16) & 0xFF), UInt8((crc >> 8) & 0xFF), UInt8(crc & 0xFF)]
+        return s
+    }
+
+    static func channel(_ ch: UInt32, tsid: UInt16, sids: [UInt16]) -> ScannedChannel {
+        ScannedChannel(space: 0, channel: ch, channelName: "\(ch + 13)Ch", spaceName: "UHF", transportStreamID: tsid,
+                       originalNetworkID: tsid, services: sids.map { ScannedService(serviceID: $0, name: "S\($0)", serviceType: 0x01, isOneSeg: false) })
+    }
+
+    @Test func grabsEveryChannel() throws {
+        let driver = FakeDriver(streams: [
+            1: Self.scheduleTS(tsid: 0x7FE1, sids: [1024, 1025]),
+            2: Self.scheduleTS(tsid: 0x7FE2, sids: [1032]),
+        ])
+        var opts = EPGGrabber.Options()
+        opts.noDataTimeout = 0.5
+        opts.stallTimeout = 2
+        let grabber = EPGGrabber(options: opts)
+        driver.tsHandler = { grabber.feed($0) }
+        let channels = [Self.channel(1, tsid: 0x7FE1, sids: [1024, 1025]), Self.channel(3, tsid: 0x7FE3, sids: [1040]),
+                        Self.channel(2, tsid: 0x7FE2, sids: [1032]),
+                        // Same TS again (e.g. listed twice): already complete → skipped without tuning.
+                        Self.channel(1, tsid: 0x7FE1, sids: [1024])]
+        var store = EPGStore()
+        var log: [String] = []
+        try grabber.grab(driver, channels: channels) { ev in
+            switch ev {
+            case .started(let c, _, _): log.append("start \(c.channel)")
+            case .skipped(let c): log.append("skip \(c.channel)")
+            case .locked(let c): log.append("locked \(c.channel)")
+            case .finished(let c, let complete): log.append("done \(c.channel) \(complete)")
+            case .updates(let u): store.merge(u)
+            }
+        }
+        driver.release()
+        #expect(log == ["start 1", "done 1 true", "start 3", "done 3 false", "start 2", "done 2 true", "skip 1"])
+        #expect(driver.tuned == [1, 3, 2])
+        #expect(store.eventCount == 9)
+        let key = try #require(store.key(originalNetworkID: 0x7FE2, transportStreamID: 0x7FE2, serviceID: 1032))
+        #expect(store.events(for: key, from: .distantPast, to: .distantFuture).map(\.title) == ["T1", "T2", "T3"])
+    }
+}

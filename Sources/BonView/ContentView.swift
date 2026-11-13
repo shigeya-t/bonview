@@ -6,6 +6,7 @@ import TSCore
 struct ContentView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var model = model
@@ -84,6 +85,10 @@ struct ContentView: View {
                 }
                 .help((model.showCaptions ? "字幕: オン" : "字幕: オフ")
                       + (model.selection?.caption == nil ? "（この番組には字幕がありません）" : ""))
+                Button { openWindow(id: "guide") } label: {
+                    Label("番組表", systemImage: model.isGrabbingEPG ? "calendar.badge.clock" : "calendar")
+                }
+                .help(model.isGrabbingEPG ? "番組表 (取得中)" : "番組表 (⌘E)")
                 Button { model.saveScreenshot() } label: { Label("スクリーンショット", systemImage: "camera") }
                     .help("スクリーンショットを保存 (⌘S)")
                 Button { model.showPanel.toggle() } label: { Label("パネル", systemImage: "sidebar.right") }

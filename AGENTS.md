@@ -35,11 +35,11 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 | Path | Notes |
 |---|---|
 | `Sources/BonDriver` | `BonDriver` protocol (IBonDriver1–3 in Swift, push-style `tsHandler`). `ProxyClient` + `ProxyProtocol` (BdpPacket: 8-byte header, big-endian body length, UTF-16LE wide strings; header byte 2 bit0 = B25 request). `TunnelClient` (little-endian 16-byte commands, `Crea`/`Conn` handshake, `GTsS` polling, reconnect with same sequence number). `Socket.swift` is a small blocking BSD-socket wrapper. |
-| `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, captions (`Caption.swift`: data group/unit parsing, `CaptionScreen` layout engine → `CaptionFrame` glyphs in plane dots, CLUT, DRCS; vertical writing / flashing / TIME not modelled), `TSDemuxer`. Not thread-safe: drive from one queue. |
+| `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, `EPG.swift` (`EPGStore`: events per service, overlapping events replaced, extended items merged; `EITScheduleProgress`; thread-safe `EPGCollector` that skips sections already seen with the same CRC), captions (`Caption.swift`: data group/unit parsing, `CaptionScreen` layout engine → `CaptionFrame` glyphs in plane dots, CLUT, DRCS; vertical writing / flashing / TIME not modelled), `TSDemuxer`. Not thread-safe: drive from one queue. |
 | `Sources/CFFmpeg` | C wrapper (`tvffmpeg.h`) so Swift never touches FFmpeg structs. Parser → decoder → (bwdif for MPEG-2) → NV12 `CVPixelBuffer`; audio → swresample float stereo. |
 | `Sources/MediaCore` | `TSPlayer` (serial queue pipeline, PTS unwrapping, status), `AVPresenter` (`AVSampleBufferRenderSynchronizer`, anchors on first audio PTS − 0.4 s, re-anchors on underrun / > 2.5 s buffered; `currentFrame()` via `FrameHistory` for screenshots), `FrameSnapshot` (pixel buffer → display-size `CGImage`, PNG/JPEG). The app composites captions with `ImageRenderer` in `BonView/Screenshot.swift`. |
-| `Sources/ChannelScan` | `ChannelScanner`: tunes each channel, waits for PAT + SDT names + NIT (or gives up after ~1.5 s without PAT and without signal). `ScannedChannel.threeDigitNumber` (remote key × 10 + (SID & 7) + 1; BS/CS: SID) and `duplicateNameServiceIDs` (sub-channels auto-hidden on first scan). |
-| `Sources/BonView` | SwiftUI app. `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
+| `Sources/ChannelScan` | `EPGGrabber`: walks scanned channels on its own `BonDriver`, feeding an `EPGCollector`, moving on when every visible service's basic schedule is complete (`EITScheduleProgress`: all segments of tables 0x50–0x57 / 0x60–0x67 up to last_table_id), on stall (20 s without a new section) or after 180 s; channels whose services are already complete are skipped (BS/CS carry the network's schedule on every TS). `ChannelScanner`: tunes each channel, waits for PAT + SDT names + NIT (or gives up after ~1.5 s without PAT and without signal). `ScannedChannel.threeDigitNumber` (remote key × 10 + (SID & 7) + 1; BS/CS: SID) and `duplicateNameServiceIDs` (sub-channels auto-hidden on first scan). |
+| `Sources/BonView` | SwiftUI app. `ProgramGuide.swift` (background EPG grab on a second connection with `channelLock = 0`, passive `EPGCollector` on the viewing stream, tuner-sharing guard, JSON persistence) and `ProgramGuideView` (番組表 window, broadcast day 04:00–28:00 JST). `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
 | `Sources/bdpcat` | CLI client. |
 | `Tests/*` | Swift Testing. `MockProxyServer`/`MockTunnelServer` speak the real protocols in-process; `DecodeTests`/`ChannelScanTests` generate TS with the ffmpeg CLI and skip when it is missing. |
 | `scripts/` | `bundle.sh`, `make_icon.swift`, `mock_bdp_server.py`, `make_demo_ts.py` (test-pattern TS with ARIB SDT/EIT/TOT, used for README screenshots). |
@@ -49,6 +49,9 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 
 - **Swift exclusivity:** `self.scan?.x = self.scan?.y` on an `@Observable` property aborts at runtime.
   Copy to a local, mutate, assign back.
+- **The EPG grab uses a second server connection.** With one tuner (or equal channel-lock priorities)
+  BonDriverProxyEx may move the viewer's tuner; `checkTunerSharing` cancels the grab and retunes when the
+  viewing stream's EIT p/f TSID turns into the channel being grabbed.
 - **`tsHandler` is read on the driver's receive thread.** Don't reassign it while streaming; `AppModel`
   routes through `TSRouter` (lock-protected) to switch between player and scanner.
 - **AAC PES contain several frames; only the first gets a PTS.** `tvffmpeg.c` continues the timeline
@@ -63,7 +66,8 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
   `BonView/CaptionPlaneView` renders frames (Canvas); `scripts/make_demo_ts.py --captions` exercises it.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
   `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
-  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`). `ProxyConfig`/`ServerProfile` decode old data with
+  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `epgLastGrab.<uuid>`.
+  Programme guide data is not in UserDefaults: `~/Library/Application Support/BonView/EPG/<uuid>.json` (`EPGStore` Codable). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;
   update those comments together with the code.
