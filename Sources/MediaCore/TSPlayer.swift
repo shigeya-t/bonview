@@ -48,6 +48,8 @@ public final class TSPlayer: @unchecked Sendable {
     public var onTime: ((Date) -> Void)?
     public var onStatus: ((PlayerStatus) -> Void)?
     public var onVideoSizeChanged: ((CGSize) -> Void)?
+    /// Caption lines to show now (top to bottom; empty = nothing). Timed against the presenter clock.
+    public var onCaption: (([String]) -> Void)?
 
     private let queue = DispatchQueue(label: "bonview.player", qos: .userInteractive)
     private let demuxer = TSDemuxer()
@@ -61,6 +63,11 @@ public final class TSPlayer: @unchecked Sendable {
     private var lastScrambledSelected = 0
     private var pendingBytes = 0
     private let pendingLock = NSLock()
+    private var captions = CaptionDecoder()
+    /// Decoded caption states waiting for their presentation time.
+    private var pendingCaptions: [(time: Double, lines: [String])] = []
+    private var shownCaption: [String] = []
+    private var captionPID: UInt16?
 
     // Options (read on the player queue).
     private var hardwareDecoding = true
@@ -95,6 +102,7 @@ public final class TSPlayer: @unchecked Sendable {
         queue.async { [self] in
             pendingLock.lock(); pendingBytes -= data.count; pendingLock.unlock()
             demuxer.feed(data)
+            deliverCaptions()
             bytesWindow += data.count
             tickStatus()
         }
@@ -108,6 +116,7 @@ public final class TSPlayer: @unchecked Sendable {
             audio = nil
             unwrap.reset()
             presenter.flush()
+            resetCaptions()
             status = PlayerStatus()
         }
     }
@@ -119,6 +128,7 @@ public final class TSPlayer: @unchecked Sendable {
             audio = nil
             unwrap.reset()
             presenter.clear()
+            resetCaptions()
             status = PlayerStatus()
             let s = status
             main { $0.onStatus?(s) }
@@ -163,11 +173,15 @@ public final class TSPlayer: @unchecked Sendable {
     // MARK: - Pipeline
 
     private func selectionChanged(_ sel: StreamSelection?) {
-        if let sel { makeDecoders(sel) } else { video = nil; audio = nil }
+        if let sel { makeDecoders(sel) } else { video = nil; audio = nil; captionPID = nil; resetCaptions() }
         main { $0.onSelectionChanged?(sel) }
     }
 
     private func makeDecoders(_ sel: StreamSelection) {
+        if sel.caption?.pid != captionPID {
+            captionPID = sel.caption?.pid
+            resetCaptions()
+        }
         var flushed = false
         if let v = sel.video {
             if video?.pid != v.pid || video?.streamType != v.streamType {
@@ -202,7 +216,38 @@ public final class TSPlayer: @unchecked Sendable {
         case .audio:
             guard let a = audio, a.pid == info.pid else { droppedPES += 1; return }
             a.feed(pes.payload, pts: pes.pts, dts: pes.dts)
+        case .caption:
+            guard captions.feed(pes.payload) else { return }
+            // No PTS (asynchronous PES) → show as soon as possible.
+            let t = pes.pts.map { unwrap.seconds($0) } ?? -.infinity
+            pendingCaptions.append((t, captions.screen.lines))
+            if pendingCaptions.count > 64 { pendingCaptions.removeFirst(pendingCaptions.count - 64) }
         }
+    }
+
+    // MARK: - Captions
+
+    private func resetCaptions() {
+        captions.reset()
+        pendingCaptions.removeAll()
+        if !shownCaption.isEmpty {
+            shownCaption = []
+            main { $0.onCaption?([]) }
+        }
+    }
+
+    /// Hands captions whose time has come to the main queue. Called after every input chunk.
+    private func deliverCaptions() {
+        guard !pendingCaptions.isEmpty, let clock = presenter.clockSeconds else { return }
+        var latest: [String]?
+        while let first = pendingCaptions.first,
+              first.time <= clock || first.time > clock + 10 { // > 10 s ahead: bogus PTS, show now
+            latest = first.lines
+            pendingCaptions.removeFirst()
+        }
+        guard let latest, latest != shownCaption else { return }
+        shownCaption = latest
+        main { $0.onCaption?(latest) }
     }
 
     private func presentVideo(_ pb: CVPixelBuffer, _ pts: Int64?) {

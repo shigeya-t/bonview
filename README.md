@@ -61,6 +61,7 @@ Mac 側にドライバーやカードリーダーは要りません。
 - **放送の情報を表示**
   - PAT / PMT / SDT / EIT（現在と次の番組）/ TOT を解析し、局名・番組名・放送時刻を表示します。文字は ARIB STD-B24 の 8 単位符号に対応しています。
   - 複数のサービス（マルチ編成）、複数の音声、二重音声（主 / 副 / 主+副）を切り替えられます。
+  - ARIB 字幕を映像の下部に表示します（文字のみ。位置・色・外字（DRCS）は未対応で、ルビは省略します）。ツールバーの字幕ボタンか ⌥⌘C で切り替えます。
 - **チャンネルスキャン**
   - 全チャンネルを順に選局し、放送のあるチャンネルだけを局名一覧にします。
 - **HaijinW 版 BonDriverProxyEx のサーバー側スクランブル解除（B25）に対応**
@@ -216,6 +217,7 @@ C:\DTV\
 | TS ファイルを開く | ⌘O |
 | 消音 | ⌥⌘M |
 | 音量を上げる / 下げる | ⌘= / ⌘- |
+| 字幕の表示切替 | ⌥⌘C |
 | パネルの表示切替 | ⌥⌘P |
 | 画面サイズ 20% / 25% / 33% / 50% / 67% / 75% / 100% / 150% / 200% | ⌘1 〜 ⌘9（この順） |
 | 設定 | ⌘, |
@@ -270,7 +272,7 @@ swift run bdpcat --tunnel -a 192.168.0.10 -d PT-T --list                # BonDri
 scripts/mock_bdp_server.py --port 1192 --tunnel-port 1193 --origin PT-T ch1.ts ch2.ts
 ```
 
-手元に TS ファイルがない場合は、`scripts/make_demo_ts.py` でデモ用の TS を作れます。ffmpeg のテスト映像に、ARIB 形式の局名（SDT）、番組情報（EIT 現在 / 次）、時刻（TOT）、リモコンキー番号（NIT、`--key` 指定時）を加えたものです。
+手元に TS ファイルがない場合は、`scripts/make_demo_ts.py` でデモ用の TS を作れます。ffmpeg のテスト映像に、ARIB 形式の局名（SDT）、番組情報（EIT 現在 / 次）、時刻（TOT）、リモコンキー番号（NIT、`--key` 指定時）を加えたものです。`--captions` を付けると、2 秒ごとに変わる字幕も入ります。
 
 ```bash
 scripts/make_demo_ts.py 21Ch.ts --sid 1056 --key 8 --name "デモテレビ" --title "デモ番組" --next "ニュース"   # 081
@@ -313,7 +315,7 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 | モジュール | 内容 |
 |---|---|
 | `BonDriver` | IBonDriver(2/3) 相当の Swift プロトコル、BonDriverProxy クライアント、BonDriverTunnel クライアント、設定ファイルの読み込み、Wake on LAN |
-| `TSCore` | TS パケットの分割と再同期、PSI/SI（PAT / PMT / SDT / EIT / TOT）、PES、ARIB STD-B24 文字列 |
+| `TSCore` | TS パケットの分割と再同期、PSI/SI（PAT / PMT / SDT / EIT / TOT）、PES、ARIB STD-B24 文字列と字幕 |
 | `CFFmpeg` | libavcodec / libavfilter / libswresample / libswscale の薄い C ラッパー |
 | `MediaCore` | デコード（VideoToolbox / FFmpeg）、PTS の管理、`AVSampleBufferRenderSynchronizer` による表示 |
 | `ChannelScan` | チャンネルスキャン |
@@ -324,7 +326,7 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 
 ## 今後の予定
 
-- 字幕（ARIB 字幕）とデータ放送
+- 字幕のレイアウト再現（位置・色・外字）、文字スーパー、データ放送
 - 番組表（EIT schedule）と録画
 - リモコンやチャンネル番号キーでの選局
 - FFmpeg を同梱した配布用ビルド（現在は Homebrew の dylib にリンクしています）

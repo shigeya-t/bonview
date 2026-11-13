@@ -1,3 +1,4 @@
+import AVFoundation
 import BonDriver
 import SwiftUI
 import TSCore
@@ -13,6 +14,9 @@ struct ContentView: View {
                 ZStack {
                     VideoView(displayLayer: model.player.presenter.displayLayer,
                               onLayout: { [model] in model.videoHostDidLayout($0) })
+                    if model.showCaptions {
+                        CaptionOverlay(lines: model.captionLines, videoSize: model.nativeVideoSize)
+                    }
                     overlay
                 }
                 .frame(minWidth: 320, minHeight: 180)
@@ -65,6 +69,15 @@ struct ContentView: View {
                 }
                 .help("画面サイズ")
                 .fixedSize()
+                // Filled + accent colour when on, outline + dimmed when off (a toolbar Toggle's
+                // pressed state is too subtle to read at a glance).
+                Button { model.showCaptions.toggle() } label: {
+                    Label(model.showCaptions ? "字幕を隠す" : "字幕を表示",
+                          systemImage: model.showCaptions ? "captions.bubble.fill" : "captions.bubble")
+                        .foregroundStyle(model.showCaptions ? Color.accentColor : Color.secondary)
+                }
+                .help((model.showCaptions ? "字幕: オン" : "字幕: オフ")
+                      + (model.selection?.caption == nil ? "（この番組には字幕がありません）" : ""))
                 Button { model.showPanel.toggle() } label: { Label("パネル", systemImage: "sidebar.right") }
             }
         }
@@ -113,6 +126,40 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Captions
+
+/// Caption text over the picture. The picture is aspect-fitted into the view, so the text is
+/// placed relative to that rectangle and sized like ARIB's 960×540 plane with 36-dot characters.
+struct CaptionOverlay: View {
+    let lines: [String]
+    let videoSize: CGSize
+
+    var body: some View {
+        GeometryReader { geo in
+            let rect = AVMakeRect(aspectRatio: videoSize, insideRect: CGRect(origin: .zero, size: geo.size))
+            let fontSize = max(10, rect.height / 15 * 0.85)
+            VStack {
+                Spacer(minLength: 0)
+                if !lines.isEmpty {
+                    Text(lines.joined(separator: "\n"))
+                        .font(.system(size: fontSize, weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .shadow(color: .black, radius: 1.5)
+                        .padding(.horizontal, fontSize * 0.4)
+                        .padding(.vertical, fontSize * 0.15)
+                        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: fontSize * 0.2))
+                }
+            }
+            .padding(.bottom, rect.height * 0.06)
+            .padding(.horizontal, rect.width * 0.03)
+            .frame(width: rect.width, height: rect.height)
+            .position(x: rect.midX, y: rect.midY)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Status bar
 
 struct StatusBar: View {
@@ -125,6 +172,14 @@ struct StatusBar: View {
                 Text("\(EventFormat.timeRange(ev))  \(ev.title)").lineLimit(1).truncationMode(.tail)
             }
             Spacer(minLength: 8)
+            if model.selection?.caption != nil {
+                Text("字幕")
+                    .font(.caption)
+                    .padding(.horizontal, 4)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(.secondary))
+                    .foregroundStyle(model.showCaptions ? .primary : .secondary)
+                    .help(model.showCaptions ? "字幕あり（表示中）" : "字幕あり（非表示）")
+            }
             if case .connected = model.state {
                 Label(model.signalText, systemImage: "antenna.radiowaves.left.and.right")
             }

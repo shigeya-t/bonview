@@ -35,7 +35,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 | Path | Notes |
 |---|---|
 | `Sources/BonDriver` | `BonDriver` protocol (IBonDriver1–3 in Swift, push-style `tsHandler`). `ProxyClient` + `ProxyProtocol` (BdpPacket: 8-byte header, big-endian body length, UTF-16LE wide strings; header byte 2 bit0 = B25 request). `TunnelClient` (little-endian 16-byte commands, `Crea`/`Conn` handshake, `GTsS` polling, reconnect with same sequence number). `Socket.swift` is a small blocking BSD-socket wrapper. |
-| `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, `TSDemuxer`. Not thread-safe: drive from one queue. |
+| `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, captions (`Caption.swift`: data group/unit parsing, `CaptionScreen` text model — layout, colours and DRCS not yet), `TSDemuxer`. Not thread-safe: drive from one queue. |
 | `Sources/CFFmpeg` | C wrapper (`tvffmpeg.h`) so Swift never touches FFmpeg structs. Parser → decoder → (bwdif for MPEG-2) → NV12 `CVPixelBuffer`; audio → swresample float stereo. |
 | `Sources/MediaCore` | `TSPlayer` (serial queue pipeline, PTS unwrapping, status), `AVPresenter` (`AVSampleBufferRenderSynchronizer`, anchors on first audio PTS − 0.4 s, re-anchors on underrun / > 2.5 s buffered). |
 | `Sources/ChannelScan` | `ChannelScanner`: tunes each channel, waits for PAT + SDT names + NIT (or gives up after ~1.5 s without PAT and without signal). `ScannedChannel.threeDigitNumber` (remote key × 10 + (SID & 7) + 1; BS/CS: SID) and `duplicateNameServiceIDs` (sub-channels auto-hidden on first scan). |
@@ -55,8 +55,11 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
   for frames without PTS (`nextAudioPts`). Dropping them causes choppy audio.
 - **Error counters start after the first PAT** following a reset, so retune garbage isn't counted.
   The "scrambled" banner uses the selected service's PIDs over the last second only.
+- **Captions are timed against `AVPresenter.clockSeconds`**, checked after every input chunk in `TSPlayer`;
+  nothing is shown while the presenter is not anchored. Caption statements start with the caption G-set
+  defaults (G3 = macro), not the SI defaults.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
-  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
+  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
   (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;

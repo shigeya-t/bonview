@@ -4,7 +4,8 @@
 ffmpeg makes the A/V (MPEG-2 1440x1080i + AAC); this script then replaces ffmpeg's SDT and
 adds EIT present/following and TOT, with names encoded as ARIB STD-B24 8-unit strings, so the
 demo shows a station name, programme titles and a broadcast clock. Used for screenshots and for
-trying BonView with scripts/mock_bdp_server.py without a tuner.
+trying BonView with scripts/mock_bdp_server.py without a tuner. With --captions it also adds an
+ARIB caption stream (component_tag 0x30) with a numbered line every two seconds.
 
     scripts/make_demo_ts.py out.ts --sid 1024 --name "デモテレビ" \\
         --title "ニュース" --text "番組の説明" --next "天気予報" --start 2026-11-13T19:00 --minutes 60
@@ -106,19 +107,88 @@ def tot(now: dt.datetime) -> bytes:
     return section(0x73, 0, mjd_bcd(now) + b"\xF0\x00", syntax=False)
 
 
+def crc16_ccitt(data: bytes) -> int:
+    crc = 0
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
+def caption_pes(group_id: int, data: bytes, pts: int) -> bytes:
+    """Synchronized caption PES (stream_id 0xBD) with one data group."""
+    group = bytes([group_id << 2, 0, 0, len(data) >> 8, len(data) & 0xFF]) + data
+    group += crc16_ccitt(group).to_bytes(2, "big")
+    payload = b"\x80\xFF\xF0" + group
+    p = bytes([0x21 | ((pts >> 29) & 0x0E), (pts >> 22) & 0xFF, ((pts >> 14) & 0xFE) | 1,
+               (pts >> 7) & 0xFF, ((pts << 1) & 0xFE) | 1])
+    body = bytes([0x80, 0x80, len(p)]) + p + payload
+    return b"\x00\x00\x01\xBD" + len(body).to_bytes(2, "big") + body
+
+
+def caption_units(body: bytes) -> bytes:
+    unit = b"\x1F\x20" + len(body).to_bytes(3, "big") + body
+    return len(unit).to_bytes(3, "big") + unit
+
+
+def caption_management() -> bytes:
+    # TMD free, one language: tag 0, DMF 0b1010, "jpn", format/TCS/rollup 0; no data units.
+    return bytes([0x3F, 1, 0x1A]) + b"jpn" + b"\x00" + b"\x00\x00\x00"
+
+
+def caption_statement(lines: list) -> bytes:
+    """CS, then each line at APS(row, 6) from row 13 upwards (bottom aligned)."""
+    body = bytearray(b"\x0C")
+    for n, line in enumerate(lines):
+        body += bytes([0x1C, 0x40 + 14 - len(lines) + n, 0x40 + 6, 0x0F]) + arib(line)  # LS0: arib() starts in G0
+    return b"\x3F" + caption_units(bytes(body))
+
+
+def first_pts(src: bytes, pid: int) -> int:
+    for i in range(len(src) // TS):
+        p = src[i * TS:(i + 1) * TS]
+        if (((p[1] & 0x1F) << 8) | p[2]) != pid or not p[1] & 0x40:
+            continue
+        o = 4 + (1 + p[4] if p[3] & 0x20 else 0)
+        h = p[o:o + 14]
+        if h[:3] == b"\x00\x00\x01" and h[7] & 0x80:
+            return ((h[9] >> 1) & 7) << 30 | h[10] << 22 | (h[11] >> 1) << 15 | h[12] << 7 | h[13] >> 1
+    raise ValueError(f"no PTS on PID {pid:#x}")
+
+
+def pmt_with_caption(sec: bytes, caption_pid: int) -> bytes:
+    """Re-encode ffmpeg's PMT with an extra caption ES (stream_type 0x06, component_tag 0x30)."""
+    length = ((sec[1] & 0x0F) << 8) | sec[2]
+    body = sec[8:3 + length - 4]  # PCR PID … ES loop
+    es = bytes([0x06, 0xE0 | (caption_pid >> 8), caption_pid & 0xFF, 0xF0, 0x03, 0x52, 0x01, 0x30])
+    return section(0x02, (sec[3] << 8) | sec[4], body + es)
+
+
 class Packetizer:
     def __init__(self):
         self.cc = {}
 
     def packets(self, pid: int, sec: bytes) -> list:
-        data = b"\x00" + sec  # pointer_field
+        return self._split(pid, b"\x00" + sec)  # pointer_field
+
+    def pes(self, pid: int, pes: bytes) -> list:
+        return self._split(pid, pes, stuff_af=True)
+
+    def _split(self, pid: int, data: bytes, stuff_af: bool = False) -> list:
         out, first = [], True
         while data:
             chunk, data = data[:184], data[184:]
             cc = self.cc.get(pid, 0)
             self.cc[pid] = (cc + 1) & 0x0F
-            head = bytes([0x47, (0x40 if first else 0) | (pid >> 8), pid & 0xFF, 0x10 | cc])
-            out.append(head + chunk + b"\xFF" * (184 - len(chunk)))
+            if len(chunk) < 184 and stuff_af:
+                # PES must be padded with an adaptation field, not trailing bytes.
+                af = 183 - len(chunk)
+                head = bytes([0x47, (0x40 if first else 0) | (pid >> 8), pid & 0xFF, 0x30 | cc, af])
+                out.append(head + (b"\x00" + b"\xFF" * (af - 1) if af else b"") + chunk)
+            else:
+                head = bytes([0x47, (0x40 if first else 0) | (pid >> 8), pid & 0xFF, 0x10 | cc])
+                out.append(head + chunk + b"\xFF" * (184 - len(chunk)))
             first = False
         return out
 
@@ -139,6 +209,7 @@ def main():
     ap.add_argument("--seconds", type=int, default=20, help="length of the generated stream")
     ap.add_argument("--pattern", default="testsrc2", help="ffmpeg lavfi video source (testsrc2, smptehdbars, mandelbrot…)")
     ap.add_argument("--tone", type=int, default=440)
+    ap.add_argument("--captions", action="store_true", help="add an ARIB caption stream (PID 0x130)")
     a = ap.parse_args()
     tsid = a.tsid if a.tsid is not None else a.sid
     start = dt.datetime.fromisoformat(a.start)
@@ -158,6 +229,15 @@ def main():
 
     pk = Packetizer()
     n = len(src) // TS
+    caption_pid = 0x130
+    captions = {}  # packet index → caption PES packets, muxed ~1 s ahead of their PTS
+    if a.captions:
+        base = first_pts(src, 0x100)
+        for k in range(1, a.seconds // 2):
+            lines = [f"字幕のテスト {k}"] + (["二行目も表示されます"] if k % 2 else [])
+            pes = caption_pes(1, caption_statement(lines), (base + k * 2 * 90000) & ((1 << 33) - 1))
+            at = max(0, int(n * (k * 2 - 1) / a.seconds))
+            captions.setdefault(at, []).append(pes)
     out = bytearray()
     every = max(1, n // (a.seconds * 4))  # SI about 4×/s
     end = start + dt.timedelta(minutes=a.minutes)
@@ -166,6 +246,10 @@ def main():
         pid = ((p[1] & 0x1F) << 8) | p[2]
         if pid == 0x11:
             continue  # replaced by our SDT
+        if a.captions and pid == 0x1000 and p[1] & 0x40:
+            for q in pk.packets(0x1000, pmt_with_caption(p[5:], caption_pid)):
+                out += q
+            continue
         if i % every == 0:
             now = start + dt.timedelta(minutes=a.minutes // 3, seconds=a.seconds * i / n)
             tables = [
@@ -176,9 +260,18 @@ def main():
             ]
             if a.key:
                 tables.append((0x10, nit(tsid, a.onid, a.sid, a.key, a.name)))
+            if a.captions:
+                tables.append((caption_pid, None))
             for pid2, sec in tables:
+                if sec is None:  # caption management data, PTS-less is fine (TMD free)
+                    for q in pk.pes(caption_pid, caption_pes(0, caption_management(), 0)):
+                        out += q
+                    continue
                 for q in pk.packets(pid2, sec):
                     out += q
+        for pes in captions.pop(i, []):
+            for q in pk.pes(caption_pid, pes):
+                out += q
         out += p
     open(a.out, "wb").write(out)
     print(f"{a.out}: {len(out) // TS} packets")
