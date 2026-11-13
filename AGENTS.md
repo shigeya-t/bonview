@@ -38,7 +38,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 | `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, `TSDemuxer`. Not thread-safe: drive from one queue. |
 | `Sources/CFFmpeg` | C wrapper (`tvffmpeg.h`) so Swift never touches FFmpeg structs. Parser → decoder → (bwdif for MPEG-2) → NV12 `CVPixelBuffer`; audio → swresample float stereo. |
 | `Sources/MediaCore` | `TSPlayer` (serial queue pipeline, PTS unwrapping, status), `AVPresenter` (`AVSampleBufferRenderSynchronizer`, anchors on first audio PTS − 0.4 s, re-anchors on underrun / > 2.5 s buffered). |
-| `Sources/ChannelScan` | `ChannelScanner`: tunes each channel, waits for PAT + SDT names (or gives up after ~1.5 s without PAT and without signal). |
+| `Sources/ChannelScan` | `ChannelScanner`: tunes each channel, waits for PAT + SDT names + NIT (or gives up after ~1.5 s without PAT and without signal). `ScannedChannel.threeDigitNumber` (remote key × 10 + (SID & 7) + 1; BS/CS: SID) and `duplicateNameServiceIDs` (sub-channels auto-hidden on first scan). |
 | `Sources/BonView` | SwiftUI app. `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
 | `Sources/bdpcat` | CLI client. |
 | `Tests/*` | Swift Testing. `MockProxyServer`/`MockTunnelServer` speak the real protocols in-process; `DecodeTests`/`ChannelScanTests` generate TS with the ffmpeg CLI and skip when it is missing. |
@@ -56,7 +56,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 - **Error counters start after the first PAT** following a reset, so retune garbage isn't counted.
   The "scrambled" banner uses the selected service's PIDs over the last second only.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
-  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>`
+  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
   (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;

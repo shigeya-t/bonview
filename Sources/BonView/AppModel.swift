@@ -55,6 +55,8 @@ final class AppModel {
         var service: ScannedService
         /// Stable across rescans: "<space>-<channel>-<service id>".
         var id: String { "\(channel.id)-\(service.serviceID)" }
+        /// "081" etc., when known.
+        var numberText: String? { channel.threeDigitNumber(for: service).map { String(format: "%03d", $0) } }
         var tuningChannel: TuningSpace.Channel {
             TuningSpace.Channel(space: channel.space, index: channel.channel, name: channel.channelName)
         }
@@ -346,6 +348,7 @@ final class AppModel {
                     let kept = self.scannedChannels.filter { !selected.contains($0.space) }
                     self.scannedChannels = (kept + result).sorted { ($0.space, $0.channel) < ($1.space, $1.channel) }
                     Preferences.setScanResult(self.scannedChannels, for: profile.id)
+                    self.autoHideSubChannels(profile)
                 }
                 // Back to watching: the channel we were on, else the first one found.
                 self.currentChannel = nil
@@ -354,6 +357,18 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    /// Hide multi-programming sub-channels (same name as the main service on the same channel)
+    /// the first time they are found. Entries seen before keep whatever the user chose.
+    private func autoHideSubChannels(_ profile: ServerProfile) {
+        var known = Preferences.knownEntries(for: profile.id)
+        for e in scannedEntries where !known.contains(e.id) {
+            if e.channel.duplicateNameServiceIDs.contains(e.service.serviceID) { hiddenEntries.insert(e.id) }
+            known.insert(e.id)
+        }
+        Preferences.setHiddenEntries(hiddenEntries, for: profile.id)
+        Preferences.setKnownEntries(known, for: profile.id)
     }
 
     func cancelScan() {
@@ -367,6 +382,7 @@ final class AppModel {
         hiddenEntries = []
         Preferences.setChannelOrder([], for: profile.id)
         Preferences.setHiddenEntries([], for: profile.id)
+        Preferences.setKnownEntries([], for: profile.id)
         Preferences.setScanResult([], for: profile.id)
     }
 
