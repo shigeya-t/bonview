@@ -122,6 +122,22 @@ enum Preferences {
         }
     }
 
+    static func channelOrder(for profile: UUID) -> [String] {
+        UserDefaults.standard.stringArray(forKey: "channelOrder.\(profile)") ?? []
+    }
+
+    static func setChannelOrder(_ ids: [String], for profile: UUID) {
+        UserDefaults.standard.set(ids.isEmpty ? nil : ids, forKey: "channelOrder.\(profile)")
+    }
+
+    static func hiddenEntries(for profile: UUID) -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: "hiddenChannels.\(profile)") ?? [])
+    }
+
+    static func setHiddenEntries(_ ids: Set<String>, for profile: UUID) {
+        UserDefaults.standard.set(ids.isEmpty ? nil : ids.sorted(), forKey: "hiddenChannels.\(profile)")
+    }
+
     static func double(_ key: String, default d: Double) -> Double {
         UserDefaults.standard.object(forKey: key) as? Double ?? d
     }
