@@ -535,7 +535,16 @@ final class AppModel {
     var videoScalePercent: Int?
     /// Whether the main window is in full-screen mode (updated on layout, which runs after every
     /// full-screen transition).
-    var isFullScreen = false
+    var isFullScreen = false {
+        didSet { if isFullScreen != oldValue { updateChromeAutoHide() } }
+    }
+    /// Full screen only: the toolbar, side panel and status bar are hidden after a few seconds idle.
+    var chromeHidden = false
+    @ObservationIgnored private lazy var chromeHider: ChromeAutoHider = {
+        let h = ChromeAutoHider()
+        h.setHidden = { [weak self] hidden in self?.chromeHidden = hidden }
+        return h
+    }()
     @ObservationIgnored private weak var videoHost: VideoHostView?
 
     /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
@@ -557,6 +566,14 @@ final class AppModel {
         if pct != videoScalePercent { videoScalePercent = pct }
         let full = host.window?.styleMask.contains(.fullScreen) ?? false
         if full != isFullScreen { isFullScreen = full }
+    }
+
+    private func updateChromeAutoHide() {
+        if isFullScreen, let host = videoHost, let window = host.window {
+            chromeHider.start(window: window, videoView: host)
+        } else {
+            chromeHider.stop()
+        }
     }
 
     func toggleFullScreen() {

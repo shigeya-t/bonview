@@ -28,15 +28,18 @@ struct ContentView: View {
                     noticeOverlay
                 }
                 .frame(minWidth: 320, minHeight: 180)
-                if model.showPanel {
+                if model.showPanel && !model.chromeHidden {
                     Divider()
                     SidePanel()
                         .frame(width: 280)
                 }
             }
-            Divider()
-            StatusBar()
+            if !model.chromeHidden {
+                Divider()
+                StatusBar()
+            }
         }
+        .toolbar(model.chromeHidden ? .hidden : .automatic, for: .windowToolbar)
         .navigationTitle(model.channelTitle)
         .sheet(isPresented: $model.showScanSheet) {
             ChannelScanView().environment(model).interactiveDismissDisabled(model.isScanning)
