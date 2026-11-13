@@ -101,10 +101,13 @@ struct AppCommands: Commands {
             Button("音量を上げる") { model.volume = min(1, model.volume + 0.05) }.keyboardShortcut("=", modifiers: .command)
             Button("音量を下げる") { model.volume = max(0, model.volume - 0.05) }.keyboardShortcut("-", modifiers: .command)
             Divider()
+            Picker("音声切替", selection: Binding(get: { model.audioIndex }, set: { model.audioIndex = $0 })) {
+                let labels = model.audioStreamLabels
+                ForEach(labels.indices, id: \.self) { Text(labels[$0]).tag($0) }
+            }
+            .disabled((model.selection?.audioStreams.count ?? 0) < 2)
             Picker("二重音声", selection: Binding(get: { model.dualMono }, set: { model.dualMono = $0 })) {
-                Text("主音声").tag(DualMonoMode.main)
-                Text("副音声").tag(DualMonoMode.sub)
-                Text("主+副").tag(DualMonoMode.both)
+                ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text(model.dualMonoLabel($0)).tag($0) }
             }
             .disabled(!model.status.isDualMono)
         }

@@ -60,14 +60,24 @@ struct ContentView: View {
                     Label("消音", systemImage: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 }
                 Slider(value: $model.volume, in: 0...1).frame(width: 90)
-                // Only while the programme actually is 二重音声 (e.g. bilingual broadcasts).
-                if model.status.isDualMono {
-                    Picker("二重音声", selection: $model.dualMono) {
-                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text($0.shortLabel).tag($0) }
+                // Only when there is a choice: several audio ES (主音声/副音声, 解説 …) and/or
+                // 二重音声 (e.g. bilingual broadcasts).
+                if let sel = model.selection, sel.audioStreams.count > 1 {
+                    let labels = model.audioStreamLabels
+                    Picker("音声", selection: $model.audioIndex) {
+                        ForEach(labels.indices, id: \.self) { Text(labels[$0]).tag($0) }
                     }
                     .pickerStyle(.segmented)
                     .fixedSize()
-                    .help("二重音声: \(model.dualMono.label)")
+                    .help("音声切替: \(labels.indices.contains(model.audioIndex) ? labels[model.audioIndex] : "")")
+                }
+                if model.status.isDualMono {
+                    Picker("二重音声", selection: $model.dualMono) {
+                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text(model.dualMonoLabel($0, short: true)).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .help("二重音声: \(model.dualMonoLabel(model.dualMono))")
                 }
                 Menu {
                     ForEach(AppModel.videoScales, id: \.self) { scale in
@@ -224,7 +234,7 @@ struct StatusBar: View {
                     .font(.caption)
                     .padding(.horizontal, 4)
                     .overlay(RoundedRectangle(cornerRadius: 3).stroke(.secondary))
-                    .help("二重音声: \(model.dualMono.label)")
+                    .help("二重音声: \(model.dualMonoLabel(model.dualMono))")
             }
             if case .connected = model.state {
                 Label(model.signalText, systemImage: "antenna.radiowaves.left.and.right")

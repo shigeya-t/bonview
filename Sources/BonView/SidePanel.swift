@@ -248,9 +248,10 @@ private struct ServicePanel: View {
             }
             if let sel = model.selection, sel.audioStreams.count > 1 {
                 Section("音声") {
+                    let labels = model.audioStreamLabels
                     Picker("音声", selection: $model.audioIndex) {
                         ForEach(sel.audioStreams.indices, id: \.self) { i in
-                            Text("音声\(i + 1) (\(sel.audioStreams[i].codecName))").tag(i)
+                            Text("\(labels.indices.contains(i) ? labels[i] : "音声\(i + 1)") (\(sel.audioStreams[i].codecName))").tag(i)
                         }
                     }
                     .pickerStyle(.inline).labelsHidden()
@@ -259,7 +260,7 @@ private struct ServicePanel: View {
             if model.status.isDualMono {
                 Section("二重音声") {
                     Picker("二重音声", selection: $model.dualMono) {
-                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text($0.label).tag($0) }
+                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text(model.dualMonoLabel($0)).tag($0) }
                     }
                     .pickerStyle(.segmented).labelsHidden()
                 }

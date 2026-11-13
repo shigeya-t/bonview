@@ -276,6 +276,8 @@ public struct EventInfo: Equatable, Sendable, Codable {
     public var extended: [ExtendedEventItem] = []
     /// content_nibble_level_1 of the first content descriptor (0x54) entry (0x0 ニュース … 0xB 福祉).
     public var genre: UInt8? = nil
+    /// Audio component descriptors (0xC4), in broadcast order.
+    public var audioComponents: [AudioComponent] = []
 
     public init(serviceID: UInt16, eventID: UInt16, start: Date?, duration: TimeInterval?, title: String, text: String,
                 extended: [ExtendedEventItem] = [], genre: UInt8? = nil) {
@@ -294,7 +296,7 @@ public struct EventInfo: Equatable, Sendable, Codable {
         return s.addingTimeInterval(d)
     }
 
-    // Older stores have no `extended` / `genre`.
+    // Older stores have no `extended` / `genre` / `audioComponents`.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         serviceID = try c.decode(UInt16.self, forKey: .serviceID)
@@ -305,6 +307,7 @@ public struct EventInfo: Equatable, Sendable, Codable {
         text = try c.decodeIfPresent(String.self, forKey: .text) ?? ""
         extended = try c.decodeIfPresent([ExtendedEventItem].self, forKey: .extended) ?? []
         genre = try c.decodeIfPresent(UInt8.self, forKey: .genre)
+        audioComponents = try c.decodeIfPresent([AudioComponent].self, forKey: .audioComponents) ?? []
     }
 }
 
@@ -383,6 +386,8 @@ public struct EIT {
                     }
                 case 0x54 where b.count >= 2:
                     if ev.genre == nil { ev.genre = b[0] >> 4 }
+                case 0xC4:
+                    if let a = AudioComponent(descriptor: b) { ev.audioComponents.append(a) }
                 default:
                     break
                 }
