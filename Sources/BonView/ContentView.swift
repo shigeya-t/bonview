@@ -11,7 +11,8 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
                 ZStack {
-                    VideoView(displayLayer: model.player.presenter.displayLayer)
+                    VideoView(displayLayer: model.player.presenter.displayLayer,
+                              onLayout: { [model] in model.videoHostDidLayout($0) })
                     overlay
                 }
                 .frame(minWidth: 320, minHeight: 180)
@@ -47,6 +48,23 @@ struct ContentView: View {
                     Label("消音", systemImage: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 }
                 Slider(value: $model.volume, in: 0...1).frame(width: 90)
+                Menu {
+                    ForEach(AppModel.videoScales, id: \.self) { pct in
+                        Button {
+                            model.setVideoScale(pct)
+                        } label: {
+                            if pct == model.videoScalePercent {
+                                Label("\(pct)%", systemImage: "checkmark")
+                            } else {
+                                Text("\(pct)%")
+                            }
+                        }
+                    }
+                } label: {
+                    Text(model.videoScalePercent.map { "\($0)%" } ?? "サイズ").monospacedDigit()
+                }
+                .help("画面サイズ")
+                .fixedSize()
                 Button { model.showPanel.toggle() } label: { Label("パネル", systemImage: "sidebar.right") }
             }
         }

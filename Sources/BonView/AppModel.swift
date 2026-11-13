@@ -122,7 +122,10 @@ final class AppModel {
         player.onEventChanged = { [weak self] p, f in self?.presentEvent = p; self?.followingEvent = f }
         player.onTime = { [weak self] in self?.broadcastTime = $0 }
         player.onStatus = { [weak self] in self?.status = $0 }
-        player.onVideoSizeChanged = { [weak self] in self?.videoSize = $0 }
+        player.onVideoSizeChanged = { [weak self] in
+            self?.videoSize = $0
+            self?.updateVideoScale()
+        }
         let player = self.player
         router.set { player.feed($0) }
 
@@ -358,6 +361,58 @@ final class AppModel {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    // MARK: - Video size (50% / 100% / …)
+
+    static let videoScales: [Int] = [50, 75, 100, 150, 200]
+
+    /// How large the picture is shown relative to its native size (rounded %), for the toolbar.
+    var videoScalePercent: Int?
+    @ObservationIgnored private weak var videoHost: VideoHostView?
+
+    /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
+    /// 1920×1080 until a picture has been decoded.
+    private var nativeVideoSize: CGSize {
+        videoSize.width > 0 && videoSize.height > 0 ? videoSize : CGSize(width: 1920, height: 1080)
+    }
+
+    func videoHostDidLayout(_ host: VideoHostView) {
+        videoHost = host
+        updateVideoScale()
+    }
+
+    private func updateVideoScale() {
+        guard let host = videoHost, host.bounds.width > 0, host.bounds.height > 0 else { return }
+        let src = nativeVideoSize
+        let fit = min(host.bounds.width / src.width, host.bounds.height / src.height)
+        let pct = Int((fit * 100).rounded())
+        if pct != videoScalePercent { videoScalePercent = pct }
+    }
+
+    /// Resize the window so the picture is shown at `percent` of its native size (1 px = 1 pt,
+    /// like QuickTime's "Actual Size"). The panel and status bar keep their size; the window
+    /// keeps its top-left corner and is shrunk to fit the screen if needed.
+    func setVideoScale(_ percent: Int) {
+        guard let host = videoHost, let window = host.window, !window.styleMask.contains(.fullScreen) else { return }
+        let src = nativeVideoSize
+        var target = CGSize(width: (src.width * CGFloat(percent) / 100).rounded(),
+                            height: (src.height * CGFloat(percent) / 100).rounded())
+        var frame = window.frame
+        let extra = CGSize(width: frame.width - host.bounds.width, height: frame.height - host.bounds.height)
+        if let visible = window.screen?.visibleFrame {
+            let k = min(1, (visible.width - extra.width) / target.width, (visible.height - extra.height) / target.height)
+            target = CGSize(width: (target.width * k).rounded(.down), height: (target.height * k).rounded(.down))
+        }
+        let size = CGSize(width: target.width + extra.width, height: target.height + extra.height)
+        let top = frame.maxY
+        frame.size = size
+        frame.origin.y = top - size.height
+        if let visible = window.screen?.visibleFrame {
+            frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - frame.width)
+            frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
+        }
+        window.setFrame(frame, display: true, animate: true)
     }
 
     // MARK: - Display helpers

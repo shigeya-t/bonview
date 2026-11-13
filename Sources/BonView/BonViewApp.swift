@@ -88,6 +88,14 @@ struct AppCommands: Commands {
                 Text("副音声").tag(DualMonoMode.sub)
             }
         }
+        CommandGroup(after: .toolbar) {
+            Menu("画面サイズ") {
+                ForEach(Array(AppModel.videoScales.enumerated()), id: \.offset) { i, pct in
+                    Button("\(pct)%") { model.setVideoScale(pct) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
+                }
+            }
+        }
         CommandGroup(after: .sidebar) {
             Button(model.showPanel ? "パネルを隠す" : "パネルを表示") { model.showPanel.toggle() }
                 .keyboardShortcut("p", modifiers: [.command, .option])

@@ -5,6 +5,8 @@ import SwiftUI
 /// Hosts the AVSampleBufferDisplayLayer. Double-click toggles full screen.
 struct VideoView: NSViewRepresentable {
     let displayLayer: AVSampleBufferDisplayLayer
+    /// Called after every layout (size change) with the hosting view.
+    var onLayout: ((VideoHostView) -> Void)?
 
     func makeNSView(context: Context) -> VideoHostView {
         let v = VideoHostView()
@@ -14,14 +16,18 @@ struct VideoView: NSViewRepresentable {
         displayLayer.frame = v.bounds
         v.layer?.addSublayer(displayLayer)
         v.videoLayer = displayLayer
+        v.onLayout = onLayout
         return v
     }
 
-    func updateNSView(_ nsView: VideoHostView, context: Context) {}
+    func updateNSView(_ nsView: VideoHostView, context: Context) {
+        nsView.onLayout = onLayout
+    }
 }
 
 final class VideoHostView: NSView {
     weak var videoLayer: CALayer?
+    var onLayout: ((VideoHostView) -> Void)?
 
     override func layout() {
         super.layout()
@@ -29,6 +35,17 @@ final class VideoHostView: NSView {
         CATransaction.setDisableActions(true)
         videoLayer?.frame = bounds
         CATransaction.commit()
+        // Report asynchronously: this runs inside AppKit/SwiftUI layout.
+        DispatchQueue.main.async { [weak self] in
+            if let self { self.onLayout?(self) }
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in
+            if let self { self.onLayout?(self) }
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
