@@ -240,6 +240,11 @@ private struct EventDetail: View {
                             .padding(.horizontal, 5).padding(.vertical, 1)
                             .background(GenreColor.color(event.genre).opacity(0.35), in: Capsule())
                     }
+                    Spacer(minLength: 8)
+                    // At the top so it is reachable without scrolling long descriptions.
+                    Button("このチャンネルを視聴") { model.tune(entry.tuningChannel, service: entry.service.serviceID) }
+                        .controlSize(.small)
+                        .disabled(model.state != .connected)
                 }
                 if let s = event.start {
                     Text("\(EventFormat.day.string(from: s)) \(EventFormat.timeRange(event))").font(.caption).monospacedDigit()
@@ -252,11 +257,6 @@ private struct EventDetail: View {
                         if !item.heading.isEmpty { Text(item.heading).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
                         Text(item.text).font(.callout).textSelection(.enabled)
                     }
-                }
-                HStack {
-                    Spacer()
-                    Button("このチャンネルを視聴") { model.tune(entry.tuningChannel, service: entry.service.serviceID) }
-                        .disabled(model.state != .connected)
                 }
             }
             .padding(14)
