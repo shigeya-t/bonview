@@ -1,0 +1,167 @@
+import Foundation
+import Testing
+@testable import TSCore
+
+// MARK: - Synthetic TS builder
+
+enum TSBuilder {
+    static func section(tableID: UInt8, ext: UInt16, version: UInt8 = 0, sectionNumber: UInt8 = 0, body: [UInt8]) -> [UInt8] {
+        let len = 5 + body.count + 4
+        var s: [UInt8] = [tableID, 0xB0 | UInt8(len >> 8), UInt8(len & 0xFF), UInt8(ext >> 8), UInt8(ext & 0xFF),
+                          0xC1 | (version << 1), sectionNumber, sectionNumber]
+        s += body
+        let crc = CRC32MPEG2.checksum(s)
+        s += [UInt8(crc >> 24), UInt8((crc >> 16) & 0xFF), UInt8((crc >> 8) & 0xFF), UInt8(crc & 0xFF)]
+        return s
+    }
+
+    static func packets(pid: UInt16, payload: [UInt8], isSection: Bool, cc: inout UInt8) -> [UInt8] {
+        var data = isSection ? [0] + payload : payload
+        var out: [UInt8] = []
+        var first = true
+        while !data.isEmpty {
+            let chunk = Array(data.prefix(184))
+            data.removeFirst(chunk.count)
+            var pkt: [UInt8] = [0x47, (first ? 0x40 : 0) | UInt8(pid >> 8), UInt8(pid & 0xFF)]
+            if chunk.count < 184 {
+                // pad via adaptation field
+                let afLen = 183 - chunk.count
+                pkt.append(0x30 | cc)
+                pkt.append(UInt8(afLen))
+                if afLen > 0 { pkt.append(0x00); pkt += [UInt8](repeating: 0xFF, count: afLen - 1) }
+            } else {
+                pkt.append(0x10 | cc)
+            }
+            pkt += chunk
+            precondition(pkt.count == 188)
+            out += pkt
+            cc = (cc + 1) & 0x0F
+            first = false
+        }
+        return out
+    }
+
+    static func pes(streamID: UInt8, pts: Int64, payload: [UInt8]) -> [UInt8] {
+        let p: [UInt8] = [
+            0x21 | UInt8((pts >> 29) & 0x0E), UInt8((pts >> 22) & 0xFF), UInt8(((pts >> 14) & 0xFE) | 1),
+            UInt8((pts >> 7) & 0xFF), UInt8(((pts << 1) & 0xFE) | 1),
+        ]
+        let len = 3 + p.count + payload.count
+        return [0, 0, 1, streamID, UInt8(len >> 8), UInt8(len & 0xFF), 0x80, 0x80, UInt8(p.count)] + p + payload
+    }
+
+    /// ARIB encode of plain ASCII (alnum set via LS1? keep simple: ESC ( J then ASCII).
+    static func service(_ id: UInt16, name: [UInt8]) -> [UInt8] {
+        let provider: [UInt8] = []
+        let desc: [UInt8] = [0x48, UInt8(3 + provider.count + name.count), 0x01, UInt8(provider.count)] + provider + [UInt8(name.count)] + name
+        return [UInt8(id >> 8), UInt8(id & 0xFF), 0xFD, 0x80 | UInt8(desc.count >> 8), UInt8(desc.count & 0xFF)] + desc
+    }
+}
+
+// MARK: - Tests
+
+@Suite struct ARIBStringTests {
+    @Test func kanjiViaDefaultG0() {
+        // 日 = 0x467C, 本 = 0x4B5C in JIS X 0208
+        #expect(ARIBString.decode([0x46, 0x7C, 0x4B, 0x5C]) == "日本")
+    }
+
+    @Test func hiraganaInGR() {
+        // GR = G2 = hiragana by default: あ = 0x22 | 0x80
+        #expect(ARIBString.decode([0xA2, 0xF3]) == "あん")
+    }
+
+    @Test func alnumAndKatakanaDesignation() {
+        // ESC ( J  → G0 = alnum, then "NHK"; ESC ( 1 → G0 = katakana, "テ"(0x46)
+        #expect(ARIBString.decode([0x1B, 0x28, 0x4A, 0x4E, 0x48, 0x4B, 0x1B, 0x28, 0x31, 0x46]) == "NHKテ")
+    }
+
+    @Test func lockingShiftToAlnum() {
+        // LS1 (0x0E) → GL = G1 = alnum
+        #expect(ARIBString.decode([0x0E, 0x42, 0x53, 0x31]) == "BS1")
+    }
+
+    @Test func additionalSymbol() {
+        #expect(ARIBString.decode([0x7A, 0x56]) == "[字]")
+    }
+}
+
+@Suite struct DemuxTests {
+    @Test func crc() {
+        #expect(CRC32MPEG2.checksum(Array("123456789".utf8)) == 0x0376_E6E7)
+    }
+
+    @Test func mjd() {
+        // 2024-01-01 12:34:56 JST: MJD 60310 = 0xEB96
+        let d = AribTime.date(mjdBCD: [0xEB, 0x96, 0x12, 0x34, 0x56])!
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let c = cal.dateComponents([.year, .month, .day, .hour, .minute, .second], from: d)
+        #expect([c.year, c.month, c.day, c.hour, c.minute, c.second] == [2024, 1, 1, 12, 34, 56])
+    }
+
+    @Test func endToEnd() {
+        var cc0: UInt8 = 0, cc1: UInt8 = 0, cc2: UInt8 = 0, ccv: UInt8 = 0, cca: UInt8 = 0
+        var ts: [UInt8] = []
+        // PAT: service 0x0400 → PMT 0x01F0, one-seg 0x05C8 → 0x1FC8
+        ts += TSBuilder.packets(pid: 0, payload: TSBuilder.section(tableID: 0, ext: 0x7FE0, body: [0x05, 0xC8, 0xFF, 0xC8, 0x04, 0x00, 0xE1, 0xF0]), isSection: true, cc: &cc0)
+        // PMTs
+        let pmtBody: [UInt8] = [0xE1, 0x00, 0xF0, 0x00,
+                                0x02, 0xE1, 0x00, 0xF0, 0x03, 0x52, 0x01, 0x00,
+                                0x0F, 0xE1, 0x10, 0xF0, 0x03, 0x52, 0x01, 0x10]
+        ts += TSBuilder.packets(pid: 0x01F0, payload: TSBuilder.section(tableID: 2, ext: 0x0400, body: pmtBody), isSection: true, cc: &cc1)
+        let oneSeg: [UInt8] = [0xE1, 0x00, 0xF0, 0x00, 0x1B, 0xE2, 0x00, 0xF0, 0x00]
+        var ccs: UInt8 = 0
+        ts += TSBuilder.packets(pid: 0x1FC8, payload: TSBuilder.section(tableID: 2, ext: 0x05C8, body: oneSeg), isSection: true, cc: &ccs)
+        // SDT with kanji name 日本
+        let sdtBody: [UInt8] = [0x7F, 0xE1, 0xFF] + TSBuilder.service(0x0400, name: [0x46, 0x7C, 0x4B, 0x5C])
+        ts += TSBuilder.packets(pid: 0x11, payload: TSBuilder.section(tableID: 0x42, ext: 0x7FE0, body: sdtBody), isSection: true, cc: &cc2)
+        // Two video PES (second flushes the first, since video PES length is bounded here too)
+        let video = [UInt8](repeating: 0xAB, count: 500)
+        let videoPTS: Int64 = 0x1_2345_6789
+        ts += TSBuilder.packets(pid: 0x0100, payload: TSBuilder.pes(streamID: 0xE0, pts: videoPTS, payload: video), isSection: false, cc: &ccv)
+        ts += TSBuilder.packets(pid: 0x0110, payload: TSBuilder.pes(streamID: 0xC0, pts: 90000, payload: [1, 2, 3]), isSection: false, cc: &cca)
+
+        let demux = TSDemuxer()
+        var services: [ServiceInfo] = []
+        var selection: StreamSelection?
+        var got: [(TSDemuxer.Track, PESPacket)] = []
+        demux.onServicesChanged = { services = $0 }
+        demux.onSelectionChanged = { selection = $0 }
+        demux.onPES = { t, _, p in got.append((t, p)) }
+
+        // Feed in odd-sized chunks to exercise the splitter.
+        var i = 0
+        while i < ts.count {
+            let n = min(77, ts.count - i)
+            demux.feed(Data(ts[i..<(i + n)]))
+            i += n
+        }
+
+        #expect(services.map(\.serviceID) == [0x05C8, 0x0400])
+        #expect(services.first { $0.serviceID == 0x0400 }?.name == "日本")
+        #expect(services.first { $0.serviceID == 0x05C8 }?.isOneSeg == true)
+        #expect(selection?.serviceID == 0x0400) // one-seg skipped
+        #expect(selection?.video?.pid == 0x0100)
+        #expect(selection?.audio?.streamType == 0x0F)
+        #expect(got.count == 2)
+        #expect(got.first { $0.0 == .video }?.1.payload.count == 500)
+        let vpts = got.first { $0.0 == .video }?.1.pts
+        #expect(vpts == videoPTS)
+        #expect(got.first { $0.0 == .audio }?.1.pts == 90000)
+        #expect(demux.stats.continuityErrors == 0)
+
+        demux.preferredServiceID = 0x05C8
+        #expect(selection?.video?.streamType == 0x1B)
+    }
+
+    @Test func splitterResyncs() {
+        var s = TSPacketSplitter()
+        var count = 0
+        var data = Data([0x00, 0x12, 0x34])
+        for _ in 0..<3 { data.append(0x47); data.append(Data(repeating: 0, count: 187)) }
+        s.split(data) { _ in count += 1 }
+        #expect(count == 3)
+        #expect(s.syncLossCount == 1)
+    }
+}

@@ -1,0 +1,37 @@
+# Build products
+.build/
+build/
+DerivedData/
+*.o
+*.dSYM/
+
+# SwiftPM / Xcode user state
+.swiftpm/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+xcuserdata/
+Package.resolved
+
+# macOS
+.DS_Store
+._*
+
+# Recorded / sample streams (large, may contain broadcast content)
+*.ts
+*.m2ts
+*.mts
+
+# Local tuner / server settings (contain host addresses, MAC addresses)
+*.ini
+*.conf
+!Tests/**/*.ini
+
+# Crash reports, logs, local env
+*.ips
+*.crash
+*.log
+.env
+.env.*
+
+# Local AI assistant settings
+.claude/settings.local.json
