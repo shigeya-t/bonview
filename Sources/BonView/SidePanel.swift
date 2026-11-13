@@ -95,13 +95,21 @@ private struct ChannelPanel: View {
     private var scannedList: some View {
         let entries = model.visibleEntries
         let order = entries.map(\.channel.spaceName).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        return List {
+        // Selection-driven list: clicking a row tunes it, and leaves the row free for the List's
+        // own drag-to-reorder (a tap gesture on the row would compete with the drag).
+        let selection = Binding<String?>(
+            get: { entries.first(where: isCurrent)?.id },
+            set: { id in
+                if let e = entries.first(where: { $0.id == id }) { model.tune(e.tuningChannel, service: e.service.serviceID) }
+            })
+        return List(selection: selection) {
             if entries.isEmpty {
                 Text("すべてのチャンネルが非表示です。「物理チャンネル」から表示を切り替えられます。")
                     .font(.callout).foregroundStyle(.secondary)
             }
             ForEach(order, id: \.self) { space in
                 let items = entries.filter { $0.channel.spaceName == space }
+                let ids = items.map(\.id)
                 Section(space) {
                     ForEach(items) { e in
                         HStack {
@@ -111,14 +119,26 @@ private struct ChannelPanel: View {
                                 Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
                             }
                         }
-                        .contentShape(Rectangle())
-                        .onTapGesture { model.tune(e.tuningChannel, service: e.service.serviceID) }
+                        .tag(e.id)
+                        .contextMenu { moveMenu(e, ids: ids) }
                     }
-                    .onMove { from, to in model.moveEntries(items.map(\.id), from: from, to: to) }
+                    .onMove { from, to in model.moveEntries(ids, from: from, to: to) }
                 }
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// Right-click alternative to dragging.
+    @ViewBuilder private func moveMenu(_ e: AppModel.ScannedEntry, ids: [String]) -> some View {
+        if let i = ids.firstIndex(of: e.id) {
+            Button("先頭へ移動") { model.moveEntries(ids, from: [i], to: 0) }.disabled(i == 0)
+            Button("上へ移動") { model.moveEntries(ids, from: [i], to: i - 1) }.disabled(i == 0)
+            Button("下へ移動") { model.moveEntries(ids, from: [i], to: i + 2) }.disabled(i == ids.count - 1)
+            Button("末尾へ移動") { model.moveEntries(ids, from: [i], to: ids.count) }.disabled(i == ids.count - 1)
+            Divider()
+            Button("非表示にする") { model.setHidden(e, true) }
+        }
     }
 
     /// BonDriver's physical channels. After a scan each found service is listed next to its
