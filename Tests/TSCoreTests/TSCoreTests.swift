@@ -84,6 +84,16 @@ enum TSBuilder {
     @Test func additionalSymbol() {
         #expect(ARIBString.decode([0x7A, 0x56]) == "[字]")
     }
+
+    @Test func gaijiTable() {
+        #expect(ARIBString.gaiji.count == 10 * 94)
+        #expect(ARIBString.decode([0x7D, 0x7A]) == "♬")          // row 93: music mark used in captions
+        #expect(ARIBString.decode([0x7E, 0x7A]) == "\u{277F}")   // row 94: dingbat negative circled 10
+        #expect(ARIBString.decode([0x75, 0x22]) == "\u{20158}")  // row 85: additional kanji (non-BMP)
+        #expect(ARIBString.decode([0x7D, 0x21 + 13]) == "\u{2121}") // row 93 cell 14: ℡
+        #expect(ARIBString.decode([0x7C, 0x21 + 63]) == "〓")    // private-use only → no glyph
+        #expect(ARIBString.decode([0x76, 0x7E]) == "〓")         // unassigned
+    }
 }
 
 @Suite struct DemuxTests {

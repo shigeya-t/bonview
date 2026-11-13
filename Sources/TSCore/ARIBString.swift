@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Supports the G0–G3 designation / invocation machinery, Kanji (JIS X 0208 via EUC-JP),
 /// alphanumeric, hiragana, katakana, JIS X 0201 katakana, JIS compatible kanji planes and
-/// the common additional symbols (rows 90–94). DRCS and mosaic sets are rendered as "〓".
+/// the additional symbols and kanji (rows 85–94, `ARIBGaiji.swift`). DRCS and mosaic sets are rendered as "〓".
 /// Alphanumerics are emitted as half-width ASCII.
 public enum ARIBString {
     enum Charset: Equatable {
@@ -322,7 +322,9 @@ public enum ARIBString {
         }
 
         func kanji(_ c1: UInt8, _ c2: UInt8, plane2: Bool) -> String {
+            // Row 90 service marks keep their bracketed text form ([字], [デ] …) used in EPG titles.
             if !plane2, c1 >= 0x7A, let s = ARIBString.additionalSymbols[UInt16(c1) << 8 | UInt16(c2)] { return s }
+            if !plane2, c1 >= 0x75, let s = ARIBString.gaijiString(c1, c2) { return s }
             if plane2 || c1 >= 0x75 { return "〓" }
             return ARIBString.jisX0208(c1, c2) ?? "〓"
         }
