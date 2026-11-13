@@ -62,6 +62,11 @@ struct AppCommands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("TSファイルを開く…") { openFile() }.keyboardShortcut("o")
         }
+        CommandGroup(replacing: .saveItem) {
+            Button("スクリーンショットを保存") { model.saveScreenshot() }.keyboardShortcut("s")
+            Button("スクリーンショットをコピー") { model.copyScreenshot() }.keyboardShortcut("c", modifiers: [.command, .shift])
+            Button("スクリーンショットのフォルダを開く") { model.revealScreenshotFolder() }
+        }
         CommandMenu("チューナー") {
             Button("接続") { model.connect() }.keyboardShortcut("k")
             Button("切断") { model.disconnect() }.keyboardShortcut("k", modifiers: [.command, .shift])

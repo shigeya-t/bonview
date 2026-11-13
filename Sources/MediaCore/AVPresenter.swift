@@ -24,6 +24,7 @@ public final class AVPresenter: @unchecked Sendable {
     private var audioFormat: CMAudioFormatDescription?
     private var audioFormatKey: (Int, Int) = (0, 0)
     private var videoFormat: CMVideoFormatDescription?
+    private var frames = FrameHistory<CVPixelBuffer>()
 
     public private(set) var videoDisplaySize: CGSize = .zero
     public var onVideoSizeChanged: ((CGSize) -> Void)?
@@ -54,6 +55,7 @@ public final class AVPresenter: @unchecked Sendable {
     /// Drop everything queued and stop the clock (channel change / discontinuity).
     public func flush() {
         lock.lock()
+        frames.keepCurrent(clock: anchored ? now : nil)
         anchored = false
         lastAudioEnd = nil
         lock.unlock()
@@ -66,6 +68,13 @@ public final class AVPresenter: @unchecked Sendable {
     public func clear() {
         flush()
         displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+        lock.lock(); frames.removeAll(); lock.unlock()
+    }
+
+    /// The picture on screen now (nil before the first frame / after `clear`).
+    public func currentFrame() -> CVPixelBuffer? {
+        lock.lock(); defer { lock.unlock() }
+        return frames.current(clock: anchored ? now : nil)
     }
 
     private var now: Double { synchronizer.currentTime().seconds }
@@ -109,6 +118,7 @@ public final class AVPresenter: @unchecked Sendable {
         lock.lock()
         anchorIfNeeded(at: t, isAudio: false)
         let ok = anchored
+        if ok { frames.append(pb, seconds: t, clock: now) }
         lock.unlock()
         if ok {
             let renderer = displayLayer.sampleBufferRenderer

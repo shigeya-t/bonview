@@ -23,6 +23,7 @@ struct ContentView: View {
                     // Superimpose (emergency / news flashes) is shown regardless of the caption setting.
                     CaptionPlaneView(frame: model.superimposeFrame, videoSize: model.nativeVideoSize)
                     overlay
+                    noticeOverlay
                 }
                 .frame(minWidth: 320, minHeight: 180)
                 if model.showPanel {
@@ -83,6 +84,8 @@ struct ContentView: View {
                 }
                 .help((model.showCaptions ? "字幕: オン" : "字幕: オフ")
                       + (model.selection?.caption == nil ? "（この番組には字幕がありません）" : ""))
+                Button { model.saveScreenshot() } label: { Label("スクリーンショット", systemImage: "camera") }
+                    .help("スクリーンショットを保存 (⌘S)")
                 Button { model.showPanel.toggle() } label: { Label("パネル", systemImage: "sidebar.right") }
             }
         }
@@ -108,6 +111,22 @@ struct ContentView: View {
             ProgressView().controlSize(.large)
         default:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder private var noticeOverlay: some View {
+        if let text = model.notice {
+            VStack {
+                Spacer()
+                Text(text)
+                    .lineLimit(1).truncationMode(.middle)
+                    .padding(.horizontal, 12).padding(.vertical, 6)
+                    .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 6))
+                    .foregroundStyle(.white)
+                    .padding(12)
+            }
+            .allowsHitTesting(false)
+            .transition(.opacity)
         }
     }
 

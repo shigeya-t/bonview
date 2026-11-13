@@ -1,4 +1,6 @@
+import AppKit
 import BonDriver
+import MediaCore
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -20,8 +22,34 @@ private struct PlaybackSettings: View {
         Form {
             Toggle("H.264 / HEVC をハードウェアデコードする (VideoToolbox)", isOn: $model.hardwareDecoding)
             Toggle("インターレース解除 (bwdif, 59.94p)", isOn: $model.deinterlace)
+            Section("スクリーンショット") {
+                LabeledContent("保存先") {
+                    HStack {
+                        Text(model.screenshotFolder.path(percentEncoded: false))
+                            .lineLimit(1).truncationMode(.middle)
+                            .foregroundStyle(.secondary)
+                            .help(model.screenshotFolder.path(percentEncoded: false))
+                        Button("変更…") { chooseFolder() }
+                    }
+                }
+                Picker("形式", selection: $model.screenshotFormat) {
+                    Text("PNG").tag(FrameSnapshot.Format.png)
+                    Text("JPEG").tag(FrameSnapshot.Format.jpeg)
+                }
+                Toggle("表示中の字幕を含める", isOn: $model.screenshotIncludesCaptions)
+            }
         }
         .formStyle(.grouped)
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.directoryURL = model.screenshotFolder
+        panel.prompt = "選択"
+        if panel.runModal() == .OK, let url = panel.url { model.screenshotFolder = url }
     }
 }
 

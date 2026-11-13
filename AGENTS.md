@@ -37,7 +37,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 | `Sources/BonDriver` | `BonDriver` protocol (IBonDriver1–3 in Swift, push-style `tsHandler`). `ProxyClient` + `ProxyProtocol` (BdpPacket: 8-byte header, big-endian body length, UTF-16LE wide strings; header byte 2 bit0 = B25 request). `TunnelClient` (little-endian 16-byte commands, `Crea`/`Conn` handshake, `GTsS` polling, reconnect with same sequence number). `Socket.swift` is a small blocking BSD-socket wrapper. |
 | `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, captions (`Caption.swift`: data group/unit parsing, `CaptionScreen` layout engine → `CaptionFrame` glyphs in plane dots, CLUT, DRCS; vertical writing / flashing / TIME not modelled), `TSDemuxer`. Not thread-safe: drive from one queue. |
 | `Sources/CFFmpeg` | C wrapper (`tvffmpeg.h`) so Swift never touches FFmpeg structs. Parser → decoder → (bwdif for MPEG-2) → NV12 `CVPixelBuffer`; audio → swresample float stereo. |
-| `Sources/MediaCore` | `TSPlayer` (serial queue pipeline, PTS unwrapping, status), `AVPresenter` (`AVSampleBufferRenderSynchronizer`, anchors on first audio PTS − 0.4 s, re-anchors on underrun / > 2.5 s buffered). |
+| `Sources/MediaCore` | `TSPlayer` (serial queue pipeline, PTS unwrapping, status), `AVPresenter` (`AVSampleBufferRenderSynchronizer`, anchors on first audio PTS − 0.4 s, re-anchors on underrun / > 2.5 s buffered; `currentFrame()` via `FrameHistory` for screenshots), `FrameSnapshot` (pixel buffer → display-size `CGImage`, PNG/JPEG). The app composites captions with `ImageRenderer` in `BonView/Screenshot.swift`. |
 | `Sources/ChannelScan` | `ChannelScanner`: tunes each channel, waits for PAT + SDT names + NIT (or gives up after ~1.5 s without PAT and without signal). `ScannedChannel.threeDigitNumber` (remote key × 10 + (SID & 7) + 1; BS/CS: SID) and `duplicateNameServiceIDs` (sub-channels auto-hidden on first scan). |
 | `Sources/BonView` | SwiftUI app. `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
 | `Sources/bdpcat` | CLI client. |
@@ -62,7 +62,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
   Superimpose (component_tag 0x38–0x3F) uses a second `CaptionDecoder` and is drawn regardless of the caption toggle.
   `BonView/CaptionPlaneView` renders frames (Canvas); `scripts/make_demo_ts.py --captions` exercises it.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
-  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
+  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
   (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;
