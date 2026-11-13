@@ -97,6 +97,8 @@ struct AppCommands: Commands {
             }
         }
         CommandGroup(after: .sidebar) {
+            Button(model.showCaptions ? "字幕を隠す" : "字幕を表示") { model.showCaptions.toggle() }
+                .keyboardShortcut("c", modifiers: [.command, .option])
             Button(model.showPanel ? "パネルを隠す" : "パネルを表示") { model.showPanel.toggle() }
                 .keyboardShortcut("p", modifiers: [.command, .option])
         }

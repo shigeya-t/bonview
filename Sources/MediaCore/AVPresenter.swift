@@ -70,6 +70,12 @@ public final class AVPresenter: @unchecked Sendable {
 
     private var now: Double { synchronizer.currentTime().seconds }
 
+    /// Current presentation time in stream seconds, or nil while not anchored (buffering).
+    public var clockSeconds: Double? {
+        lock.lock(); defer { lock.unlock() }
+        return anchored ? now : nil
+    }
+
     private func anchorIfNeeded(at t: Double, isAudio: Bool) {
         if anchored { return }
         if hasAudio && !isAudio { return }

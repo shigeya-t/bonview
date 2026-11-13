@@ -102,6 +102,8 @@ final class AppModel {
     var broadcastTime: Date?
     var status = PlayerStatus()
     var videoSize: CGSize = .zero
+    /// Caption text currently on screen (top to bottom).
+    var captionLines: [String] = []
 
     // MARK: Audio / video options
     var volume: Double = Preferences.double("volume", default: 0.8) {
@@ -121,6 +123,9 @@ final class AppModel {
     }
     var deinterlace = Preferences.bool("deinterlace", default: true) {
         didSet { player.setDeinterlace(deinterlace); UserDefaults.standard.set(deinterlace, forKey: "deinterlace") }
+    }
+    var showCaptions = Preferences.bool("showCaptions", default: true) {
+        didSet { UserDefaults.standard.set(showCaptions, forKey: "showCaptions") }
     }
     var showPanel = Preferences.bool("showPanel", default: true) {
         didSet { UserDefaults.standard.set(showPanel, forKey: "showPanel") }
@@ -151,6 +156,7 @@ final class AppModel {
         player.onEventChanged = { [weak self] p, f in self?.presentEvent = p; self?.followingEvent = f }
         player.onTime = { [weak self] in self?.broadcastTime = $0 }
         player.onStatus = { [weak self] in self?.status = $0 }
+        player.onCaption = { [weak self] in self?.captionLines = $0 }
         player.onVideoSizeChanged = { [weak self] in
             self?.videoSize = $0
             self?.updateVideoScale()
@@ -445,7 +451,7 @@ final class AppModel {
 
     /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
     /// 1920×1080 until a picture has been decoded.
-    private var nativeVideoSize: CGSize {
+    var nativeVideoSize: CGSize {
         videoSize.width > 0 && videoSize.height > 0 ? videoSize : CGSize(width: 1920, height: 1080)
     }
 

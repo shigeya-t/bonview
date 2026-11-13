@@ -9,7 +9,7 @@ import Foundation
 public enum ARIBString {
     enum Charset: Equatable {
         case kanji, alnum, hiragana, katakana, jisKatakana, symbols, jisKanji1, jisKanji2
-        case mosaic, drcs(Int), unknown(Int)
+        case mosaic, drcs(Int), macro, unknown(Int)
 
         var bytes: Int {
             switch self {
@@ -40,17 +40,59 @@ public enum ARIBString {
         return d.run(Array(bytes))
     }
 
+    /// Caption-relevant control functions (ARIB STD-B24 vol.1 part 2, 7.2.5). Others are skipped.
+    enum Control: Equatable {
+        case clearScreen                // CS
+        case newLine                    // APR
+        case down, up, back, forward    // APD, APU, APB, APF
+        case position(row: Int, column: Int) // APS
+        case dotPosition(x: Int, y: Int)     // CSI ACPS
+        case cancelLine                 // CAN
+        case size(CharacterSize)        // SSZ / MSZ / NSZ
+    }
+
+    enum CharacterSize: Equatable { case small, medium, normal }
+
+    enum Token: Equatable {
+        case text(String)
+        case control(Control)
+    }
+
     struct Decoder {
         var g: [Charset] = [.kanji, .alnum, .hiragana, .katakana]
         var gl = 0
         var gr = 2
         var out = ""
+        /// Caption mode: control functions become tokens instead of being folded into `out`.
+        var captionMode = false
+        var tokens: [Token] = []
+        private var macroDepth = 0
+
+        /// Initial state for caption statements: G3 holds the macro set (ARIB STD-B24 vol.1 part 3, 8.2.1).
+        static func caption() -> Decoder {
+            var d = Decoder()
+            d.g = [.kanji, .alnum, .hiragana, .macro]
+            d.captionMode = true
+            return d
+        }
+
+        mutating func control(_ c: Control) {
+            if !out.isEmpty { tokens.append(.text(out)); out = "" }
+            tokens.append(.control(c))
+        }
+
+        mutating func finishTokens() -> [Token] {
+            if !out.isEmpty { tokens.append(.text(out)); out = "" }
+            defer { tokens = [] }
+            return tokens
+        }
 
         mutating func run(_ b: [UInt8]) -> String {
             var i = 0
             var single: Int? = nil // single shift (SS2/SS3)
             while i < b.count {
                 let c = b[i]
+                if captionMode, let n = captionControl(b, i) { i += n; continue }
                 switch c {
                 case 0x0F: gl = 0; i += 1           // LS0
                 case 0x0E: gl = 1; i += 1           // LS1
@@ -95,7 +137,7 @@ public enum ARIBString {
                 if b[i] == 0x20 {                                   // DRCS
                     i += 1
                     guard i < b.count else { return i }
-                    g[n] = .drcs(1)
+                    g[n] = b[i] == 0x70 ? .macro : .drcs(1)
                     return i + 1
                 }
                 g[n] = Charset.graphic(b[i], twoByte: false)
@@ -122,6 +164,35 @@ public enum ARIBString {
             }
         }
 
+        /// Handles caption control codes; returns the consumed length, or nil if `b[i]` is not one.
+        mutating func captionControl(_ b: [UInt8], _ i: Int) -> Int? {
+            func param(_ k: Int) -> Int? { i + k < b.count ? Int(b[i + k] & 0x3F) : nil }
+            switch b[i] {
+            case 0x0C: control(.clearScreen); return 1
+            case 0x0D: control(.newLine); return 1
+            case 0x0A: control(.down); return 1
+            case 0x0B: control(.up); return 1
+            case 0x08: control(.back); return 1
+            case 0x09: control(.forward); return 1
+            case 0x18: control(.cancelLine); return 1
+            case 0x1C:
+                if let r = param(1), let c = param(2) { control(.position(row: r, column: c)) }
+                return 3
+            case 0x88: control(.size(.small)); return 1
+            case 0x89: control(.size(.medium)); return 1
+            case 0x8A: control(.size(.normal)); return 1
+            case 0x9B:
+                let n = c1Length(b, i)
+                // CSI P1 ; P2 0x20 F  — ACPS (F = 0x61) sets the active position in dots.
+                if i + n - 1 < b.count, b[i + n - 1] == 0x61 {
+                    let params = String(decoding: b[(i + 1)..<(i + n - 2)], as: UTF8.self).split(separator: ";").compactMap { Int($0) }
+                    if params.count >= 2 { control(.dotPosition(x: params[0], y: params[1])) }
+                }
+                return n
+            default: return nil
+            }
+        }
+
         func controlLength(_ b: [UInt8], _ i: Int) -> Int {
             switch b[i] {
             case 0x16: return 2 // PAPF
@@ -135,6 +206,9 @@ public enum ARIBString {
             case 0x90: // COL
                 return i + 1 < b.count && b[i + 1] == 0x20 ? 3 : 2
             case 0x91, 0x93, 0x94, 0x97: return 2 // FLC, POL, WMM, HLC
+            case 0x8B: return 2 // SZX
+            case 0x92: // CDC
+                return i + 1 < b.count && b[i + 1] == 0x20 ? 3 : 2
             case 0x95: // MACRO
                 var j = i + 2
                 while j + 1 < b.count && !(b[j] == 0x95 && b[j + 1] == 0x4F) { j += 1 }
@@ -180,6 +254,13 @@ public enum ARIBString {
             case .drcs(let n), .unknown(let n):
                 out += "〓"
                 return n
+            case .macro:
+                if let m = ARIBString.defaultMacros[c1], macroDepth < 2 {
+                    macroDepth += 1
+                    _ = run(m)
+                    macroDepth -= 1
+                }
+                return 1
             }
         }
 
@@ -195,6 +276,34 @@ public enum ARIBString {
             return ARIBString.jisX0208(c1, c2) ?? "〓"
         }
     }
+
+    // MARK: Default macros (ARIB STD-B24 vol.1 part 3, default macro statements 0x60–0x6F)
+
+    /// Each re-designates G0–G3, then LS0 + LS2R.
+    static let defaultMacros: [UInt8: [UInt8]] = {
+        let tail: [UInt8] = [0x1B, 0x2B, 0x20, 0x70, 0x0F, 0x1B, 0x7D]
+        let heads: [[UInt8]] = [
+            [0x1B, 0x24, 0x42, 0x1B, 0x29, 0x4A, 0x1B, 0x2A, 0x30],
+            [0x1B, 0x24, 0x42, 0x1B, 0x29, 0x31, 0x1B, 0x2A, 0x30],
+            [0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x41, 0x1B, 0x2A, 0x30],
+            [0x1B, 0x28, 0x32, 0x1B, 0x29, 0x34, 0x1B, 0x2A, 0x35],
+            [0x1B, 0x28, 0x32, 0x1B, 0x29, 0x33, 0x1B, 0x2A, 0x35],
+            [0x1B, 0x28, 0x32, 0x1B, 0x29, 0x20, 0x41, 0x1B, 0x2A, 0x35],
+            [0x1B, 0x28, 0x20, 0x41, 0x1B, 0x29, 0x20, 0x42, 0x1B, 0x2A, 0x20, 0x43],
+            [0x1B, 0x28, 0x20, 0x44, 0x1B, 0x29, 0x20, 0x45, 0x1B, 0x2A, 0x20, 0x46],
+            [0x1B, 0x28, 0x20, 0x47, 0x1B, 0x29, 0x20, 0x48, 0x1B, 0x2A, 0x20, 0x49],
+            [0x1B, 0x28, 0x20, 0x4A, 0x1B, 0x29, 0x20, 0x4B, 0x1B, 0x2A, 0x20, 0x4C],
+            [0x1B, 0x28, 0x20, 0x4D, 0x1B, 0x29, 0x20, 0x4E, 0x1B, 0x2A, 0x20, 0x4F],
+            [0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x42, 0x1B, 0x2A, 0x30],
+            [0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x43, 0x1B, 0x2A, 0x30],
+            [0x1B, 0x24, 0x42, 0x1B, 0x29, 0x20, 0x44, 0x1B, 0x2A, 0x30],
+            [0x1B, 0x28, 0x31, 0x1B, 0x29, 0x30, 0x1B, 0x2A, 0x4A],
+            [0x1B, 0x28, 0x4A, 0x1B, 0x29, 0x32, 0x1B, 0x2A, 0x20, 0x41],
+        ]
+        var m: [UInt8: [UInt8]] = [:]
+        for (n, h) in heads.enumerated() { m[0x60 + UInt8(n)] = h + tail }
+        return m
+    }()
 
     // MARK: JIS X 0208
 
