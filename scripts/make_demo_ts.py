@@ -92,6 +92,16 @@ def eit(tsid: int, onid: int, sid: int, number: int, event_id: int, start: dt.da
     return section(0x4E, sid, body, number=number, last=1)
 
 
+def nit(tsid: int, onid: int, sid: int, key: int, ts_name: str) -> bytes:
+    """NIT (actual) with a TS information descriptor carrying the remote-control key."""
+    name = arib(ts_name)
+    tsinfo = bytes([key, (len(name) << 2) | 1]) + name + bytes([0x0F, 1]) + sid.to_bytes(2, "big")
+    descs = bytes([0xCD, len(tsinfo)]) + tsinfo + bytes([0x41, 3]) + sid.to_bytes(2, "big") + b"\x01"
+    loop = tsid.to_bytes(2, "big") + onid.to_bytes(2, "big") + bytes([0xF0 | (len(descs) >> 8), len(descs) & 0xFF]) + descs
+    body = b"\xF0\x00" + bytes([0xF0 | (len(loop) >> 8), len(loop) & 0xFF]) + loop
+    return section(0x40, onid, body)
+
+
 def tot(now: dt.datetime) -> bytes:
     return section(0x73, 0, mjd_bcd(now) + b"\xF0\x00", syntax=False)
 
@@ -120,6 +130,7 @@ def main():
     ap.add_argument("--tsid", type=int, default=None, help="default: sid")
     ap.add_argument("--onid", type=int, default=0x7FE0)
     ap.add_argument("--name", default="デモテレビ")
+    ap.add_argument("--key", type=int, default=0, help="remote-control key (1–12) sent in the NIT; 0 = no NIT")
     ap.add_argument("--title", default="デモ番組")
     ap.add_argument("--text", default="BonView の動作確認用に生成したテスト映像です。")
     ap.add_argument("--next", default="次の番組")
@@ -157,12 +168,15 @@ def main():
             continue  # replaced by our SDT
         if i % every == 0:
             now = start + dt.timedelta(minutes=a.minutes // 3, seconds=a.seconds * i / n)
-            for pid2, sec in (
+            tables = [
                 (0x11, sdt(tsid, a.onid, a.sid, a.name)),
                 (0x12, eit(tsid, a.onid, a.sid, 0, 1, start, a.minutes, a.title, a.text)),
                 (0x12, eit(tsid, a.onid, a.sid, 1, 2, end, 30, a.next, "")),
                 (0x14, tot(now)),
-            ):
+            ]
+            if a.key:
+                tables.append((0x10, nit(tsid, a.onid, a.sid, a.key, a.name)))
+            for pid2, sec in tables:
                 for q in pk.packets(pid2, sec):
                     out += q
         out += p

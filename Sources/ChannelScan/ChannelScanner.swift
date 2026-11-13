@@ -35,19 +35,49 @@ public struct ScannedChannel: Codable, Hashable, Sendable, Identifiable {
     public var spaceName: String
     public var transportStreamID: UInt16
     public var originalNetworkID: UInt16?
+    /// ISDB-T remote-control key (1–12) from the NIT; nil if not received (or scanned by an older version).
+    public var remoteControlKeyID: UInt8?
     public var services: [ScannedService]
 
     public var id: String { "\(space)-\(channel)" }
 
     public init(space: UInt32, channel: UInt32, channelName: String, spaceName: String,
-                transportStreamID: UInt16, originalNetworkID: UInt16?, services: [ScannedService]) {
+                transportStreamID: UInt16, originalNetworkID: UInt16?, remoteControlKeyID: UInt8? = nil,
+                services: [ScannedService]) {
         self.space = space
         self.channel = channel
         self.channelName = channelName
         self.spaceName = spaceName
         self.transportStreamID = transportStreamID
         self.originalNetworkID = originalNetworkID
+        self.remoteControlKeyID = remoteControlKeyID
         self.services = services
+    }
+
+    /// The 3-digit channel number shown by TVs (e.g. 081, 082 for remote key 8).
+    /// Terrestrial: key × 10 + service number (low 3 bits of the service ID) + 1.
+    /// BS / CS (original network 4, 6, 7): the service ID itself.
+    public func threeDigitNumber(for service: ScannedService) -> Int? {
+        if let key = remoteControlKeyID, key > 0 {
+            return Int(key) * 10 + Int(service.serviceID & 0x07) + 1
+        }
+        if let onid = originalNetworkID, [4, 6, 7].contains(onid) {
+            return Int(service.serviceID)
+        }
+        return nil
+    }
+
+    /// Viewable services whose name repeats that of a lower-numbered service on the same channel —
+    /// multi-programming sub-channels (082, 083…) that usually carry nothing of their own.
+    public var duplicateNameServiceIDs: Set<UInt16> {
+        var seen = Set<String>()
+        var dups = Set<UInt16>()
+        for svc in services.filter(\.isViewable).sorted(by: { $0.serviceID < $1.serviceID }) {
+            let key = svc.name.trimmingCharacters(in: .whitespaces)
+            if key.isEmpty { continue }
+            if !seen.insert(key).inserted { dups.insert(svc.serviceID) }
+        }
+        return dups
     }
 }
 
@@ -61,7 +91,10 @@ public final class ChannelScanner: @unchecked Sendable {
         /// Give up on a channel that delivered no PAT after this long and has no signal.
         public var noSignalTimeout: Double = 1.5
         /// Maximum time spent on one channel.
-        public var timeout: Double = 5
+        public var timeout: Double = 12
+        /// Once PAT/SDT are complete, keep waiting this long (from tuning) for the NIT, which some
+        /// broadcasters repeat only every few seconds. It carries the remote-control key.
+        public var nitTimeout: Double = 10
         /// Signal level (dB) below which a channel without PAT is considered empty.
         public var minSignal: Float = 1
 
@@ -121,18 +154,20 @@ public final class ChannelScanner: @unchecked Sendable {
                 let tsid = demux.transportStreamID
                 let onid = demux.originalNetworkID
                 let services = demux.services
+                let key = demux.remoteControlKeyID
+                let hasNIT = demux.hasNIT
                 demuxLock.unlock()
 
                 if let tsid {
                     let named = !services.isEmpty && services.allSatisfy { !$0.name.isEmpty }
                     let scanned = ScannedChannel(
                         space: ch.space, channel: ch.index, channelName: ch.name, spaceName: spaceName,
-                        transportStreamID: tsid, originalNetworkID: onid,
+                        transportStreamID: tsid, originalNetworkID: onid, remoteControlKeyID: key,
                         services: services.map {
                             ScannedService(serviceID: $0.serviceID, name: $0.name, serviceType: $0.serviceType, isOneSeg: $0.isOneSeg)
-                        })
+                        }.sorted { $0.serviceID < $1.serviceID })
                     result = scanned
-                    if onid != nil && named { break }
+                    if onid != nil && named && (hasNIT || elapsed >= options.nitTimeout) { break }
                 } else if elapsed >= options.noSignalTimeout && driver.signalLevel < options.minSignal {
                     break
                 }

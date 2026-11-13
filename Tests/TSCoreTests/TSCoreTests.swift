@@ -155,6 +155,44 @@ enum TSBuilder {
         #expect(selection?.video?.streamType == 0x1B)
     }
 
+    /// NIT with two TSs; the TS information descriptor carries the remote-control key.
+    static func nitSection() -> [UInt8] {
+        func ts(_ tsid: UInt16, key: UInt8, name: [UInt8], services: [(UInt16, UInt8)]) -> [UInt8] {
+            let tsInfo: [UInt8] = [0xCD, UInt8(2 + name.count + 4), key, UInt8(name.count << 2 | 1)] + name
+                + [0x0F, UInt8(services.count)] + services.flatMap { [UInt8($0.0 >> 8), UInt8($0.0 & 0xFF)] }
+            let list: [UInt8] = [0x41, UInt8(services.count * 3)] + services.flatMap { [UInt8($0.0 >> 8), UInt8($0.0 & 0xFF), $0.1] }
+            let d = tsInfo.count + list.count
+            // tsInfo length byte covers key, len, name, type info, count, ids
+            var fixed = tsInfo
+            fixed[1] = UInt8(fixed.count - 2)
+            return [UInt8(tsid >> 8), UInt8(tsid & 0xFF), 0x7F, 0xE0, 0xF0 | UInt8(d >> 8), UInt8(d & 0xFF)] + fixed + list
+        }
+        let name: [UInt8] = [0x40, 6, 0x0E, 0x54, 0x4F, 0x4B, 0x59, 0x4F] // network name "TOKYO" (LS1 + ASCII)
+        let loop = ts(0x7FE8, key: 8, name: [0x0E, 0x43, 0x58], services: [(0x0420, 0x01), (0x0421, 0x01), (0x05A8, 0xC0)])
+            + ts(0x7FE1, key: 1, name: [], services: [(0x0400, 0x01)])
+        let body: [UInt8] = [0xF0, UInt8(name.count)] + name + [0xF0 | UInt8(loop.count >> 8), UInt8(loop.count & 0xFF)] + loop
+        return TSBuilder.section(tableID: 0x40, ext: 0x7FE0, body: body)
+    }
+
+    @Test func nitRemoteControlKey() {
+        let nit = NIT(Self.nitSection())
+        #expect(nit?.networkID == 0x7FE0)
+        #expect(nit?.networkName == "TOKYO")
+        #expect(nit?.transportStreams.map(\.transportStreamID) == [0x7FE8, 0x7FE1])
+        #expect(nit?.transportStreams.map(\.remoteControlKeyID) == [8, 1])
+        #expect(nit?.transportStreams.first?.name == "CX")
+        #expect(nit?.transportStreams.first?.services.map(\.id) == [0x0420, 0x0421, 0x05A8])
+
+        // Demuxer: key for the current TS only, after PAT and NIT in either order.
+        var cc0: UInt8 = 0, cc1: UInt8 = 0
+        var ts = TSBuilder.packets(pid: 0x10, payload: Self.nitSection(), isSection: true, cc: &cc1)
+        ts += TSBuilder.packets(pid: 0, payload: TSBuilder.section(tableID: 0, ext: 0x7FE8, body: [0x04, 0x20, 0xE1, 0xF0]), isSection: true, cc: &cc0)
+        let demux = TSDemuxer()
+        demux.feed(Data(ts))
+        #expect(demux.hasNIT)
+        #expect(demux.remoteControlKeyID == 8)
+    }
+
     @Test func splitterResyncs() {
         var s = TSPacketSplitter()
         var count = 0

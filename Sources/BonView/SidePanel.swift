@@ -112,7 +112,10 @@ private struct ChannelPanel: View {
                 let ids = items.map(\.id)
                 Section(space) {
                     ForEach(items) { e in
-                        HStack {
+                        HStack(spacing: 8) {
+                            if let n = e.numberText {
+                                Text(n).monospacedDigit().foregroundStyle(.secondary)
+                            }
                             Text(e.service.displayName)
                             Spacer()
                             if isCurrent(e) {
@@ -166,6 +169,9 @@ private struct ChannelPanel: View {
                                 HStack(spacing: 8) {
                                     Text(i == 0 ? ch.name : "").monospacedDigit()
                                         .frame(minWidth: 44, alignment: .leading)
+                                    if let n = e.numberText {
+                                        Text(n).monospacedDigit().foregroundStyle(.secondary)
+                                    }
                                     Text(e.service.displayName)
                                         .foregroundStyle(model.isHidden(e) ? .secondary : .primary)
                                         .lineLimit(1)

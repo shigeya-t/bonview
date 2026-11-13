@@ -110,6 +110,40 @@ final class FakeDriver: BonDriver, @unchecked Sendable {
         #expect(driver.tuned.isEmpty)
     }
 
+    @Test func threeDigitNumbers() {
+        func svc(_ id: UInt16, _ name: String, type: UInt8 = 0x01) -> ScannedService {
+            ScannedService(serviceID: id, name: name, serviceType: type, isOneSeg: false)
+        }
+        // Terrestrial, remote key 8: 1056 → 081, 1057 → 082, 1058 → 083.
+        let cx = ScannedChannel(space: 0, channel: 8, channelName: "21Ch", spaceName: "UHF", transportStreamID: 0x7FE8,
+                                originalNetworkID: 0x7FE8, remoteControlKeyID: 8,
+                                services: [svc(1056, "フジテレビ"), svc(1057, "フジテレビ"), svc(1058, "フジテレビ")])
+        #expect(cx.services.map { cx.threeDigitNumber(for: $0) } == [81, 82, 83])
+        #expect(cx.duplicateNameServiceIDs == [1057, 1058])
+
+        // MX: 091 MX1, 092 MX2, 093 MX1 (sub) → only the second MX1 is a duplicate.
+        let mx = ScannedChannel(space: 0, channel: 3, channelName: "16Ch", spaceName: "UHF", transportStreamID: 0x7FF0,
+                                originalNetworkID: 0x7FF0, remoteControlKeyID: 9,
+                                services: [svc(23610, "TOKYO MX1"), svc(23608, "TOKYO MX1"), svc(23609, "TOKYO MX2"),
+                                           svc(23612, "データ", type: 0xC0)])
+        #expect(mx.threeDigitNumber(for: mx.services[1]) == 91)
+        #expect(mx.duplicateNameServiceIDs == [23610])
+
+        // BS: the service ID is the number. Unknown key on terrestrial (old scan data): none.
+        let bs = ScannedChannel(space: 1, channel: 0, channelName: "BS01/TS0", spaceName: "BS", transportStreamID: 0x4010,
+                                originalNetworkID: 4, services: [svc(101, "NHK BS")])
+        #expect(bs.threeDigitNumber(for: bs.services[0]) == 101)
+        let old = ScannedChannel(space: 0, channel: 8, channelName: "21Ch", spaceName: "UHF", transportStreamID: 0x7FE8,
+                                 originalNetworkID: 0x7FE8, services: [svc(1056, "フジテレビ")])
+        #expect(old.threeDigitNumber(for: old.services[0]) == nil)
+    }
+
+    @Test func decodesScanDataWithoutRemoteKey() throws {
+        let json = #"{"space":0,"channel":1,"channelName":"14Ch","spaceName":"UHF","transportStreamID":1,"services":[]}"#
+        let ch = try JSONDecoder().decode(ScannedChannel.self, from: Data(json.utf8))
+        #expect(ch.remoteControlKeyID == nil && ch.originalNetworkID == nil)
+    }
+
     @Test func viewableFilter() {
         #expect(ScannedService(serviceID: 1, name: "", serviceType: 0x01, isOneSeg: false).isViewable)
         #expect(!ScannedService(serviceID: 1, name: "", serviceType: 0xC0, isOneSeg: false).isViewable)
