@@ -21,6 +21,14 @@ public struct TSPacket {
         return bytes[5] & 0x80 != 0
     }
 
+    /// Program clock reference in seconds (27 MHz: base × 300 + extension), if this packet carries one.
+    public var pcr: Double? {
+        guard adaptationFieldControl & 0x02 != 0, bytes[4] >= 7, bytes[5] & 0x10 != 0 else { return nil }
+        let base = Int64(bytes[6]) << 25 | Int64(bytes[7]) << 17 | Int64(bytes[8]) << 9 | Int64(bytes[9]) << 1 | Int64(bytes[10] >> 7)
+        let ext = Int64(bytes[10] & 0x01) << 8 | Int64(bytes[11])
+        return Double(base * 300 + ext) / 27_000_000
+    }
+
     /// Payload bytes, or nil if the packet carries none (or the adaptation field is broken).
     public var payload: UnsafeRawBufferPointer? {
         guard hasPayload else { return nil }
