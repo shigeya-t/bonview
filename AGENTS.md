@@ -56,7 +56,8 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 - **Error counters start after the first PAT** following a reset, so retune garbage isn't counted.
   The "scrambled" banner uses the selected service's PIDs over the last second only.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
-  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`. `ProxyConfig`/`ServerProfile` decode old data with
+  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>`
+  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;
   update those comments together with the code.
