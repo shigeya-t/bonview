@@ -155,6 +155,23 @@ final class AppModel {
     var audioIndex = 0 {
         didSet { player.selectAudio(index: audioIndex) }
     }
+
+    /// Labels for the selected service's audio ES (EIT audio component text / language, else 音声N).
+    var audioStreamLabels: [String] {
+        guard let sel = selection else { return [] }
+        return AudioComponent.labels(for: sel.audioStreams, components: presentEvent?.audioComponents ?? [])
+    }
+
+    /// Label of a 二重音声 choice; uses the languages from the EIT when they are known (日本語 / 英語).
+    func dualMonoLabel(_ mode: DualMonoMode, short: Bool = false) -> String {
+        let tag = selection?.audio?.componentTag
+        let names = presentEvent?.audioComponents.first { $0.componentTag == tag && tag != nil }?.dualMonoNames
+        switch (mode, names) {
+        case (.main, let n?): return n.main
+        case (.sub, let n?): return n.sub
+        default: return short ? mode.shortLabel : mode.label
+        }
+    }
     var hardwareDecoding = Preferences.bool("hardwareDecoding", default: true) {
         didSet { player.setHardwareDecoding(hardwareDecoding); UserDefaults.standard.set(hardwareDecoding, forKey: "hardwareDecoding") }
     }
