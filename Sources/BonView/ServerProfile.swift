@@ -154,4 +154,14 @@ enum Preferences {
     static func bool(_ key: String, default d: Bool) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? d
     }
+
+    /// Where screenshots go: the saved folder, or ~/Pictures/BonView.
+    static var screenshotFolder: URL {
+        if let path = UserDefaults.standard.string(forKey: "screenshotFolder"), !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        let pictures = FileManager.default.urls(for: .picturesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures")
+        return pictures.appendingPathComponent("BonView", isDirectory: true)
+    }
 }

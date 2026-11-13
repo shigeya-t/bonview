@@ -141,6 +141,20 @@ final class AppModel {
         didSet { UserDefaults.standard.set(showPanel, forKey: "showPanel") }
     }
 
+    // MARK: Screenshots (see Screenshot.swift)
+    var screenshotFolder: URL = Preferences.screenshotFolder {
+        didSet { UserDefaults.standard.set(screenshotFolder.path, forKey: "screenshotFolder") }
+    }
+    var screenshotFormat = FrameSnapshot.Format(rawValue: UserDefaults.standard.string(forKey: "screenshotFormat") ?? "") ?? .png {
+        didSet { UserDefaults.standard.set(screenshotFormat.rawValue, forKey: "screenshotFormat") }
+    }
+    var screenshotIncludesCaptions = Preferences.bool("screenshotIncludesCaptions", default: true) {
+        didSet { UserDefaults.standard.set(screenshotIncludesCaptions, forKey: "screenshotIncludesCaptions") }
+    }
+    /// Short message shown over the picture (e.g. "保存しました").
+    var notice: String?
+    @ObservationIgnored var noticeGeneration = 0
+
     @ObservationIgnored let player = TSPlayer()
     @ObservationIgnored private var driver: BonDriver?
     @ObservationIgnored private let driverQueue = DispatchQueue(label: "bonview.driver", qos: .userInitiated)
