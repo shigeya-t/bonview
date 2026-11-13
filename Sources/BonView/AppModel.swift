@@ -151,7 +151,10 @@ final class AppModel {
         player.onEventChanged = { [weak self] p, f in self?.presentEvent = p; self?.followingEvent = f }
         player.onTime = { [weak self] in self?.broadcastTime = $0 }
         player.onStatus = { [weak self] in self?.status = $0 }
-        player.onVideoSizeChanged = { [weak self] in self?.videoSize = $0 }
+        player.onVideoSizeChanged = { [weak self] in
+            self?.videoSize = $0
+            self?.updateVideoScale()
+        }
         let player = self.player
         router.set { player.feed($0) }
 
@@ -407,6 +410,81 @@ final class AppModel {
         } catch {
             state = .failed(error.localizedDescription)
         }
+    }
+
+    // MARK: - Video size (50% / 100% / …)
+
+    struct VideoScale: Hashable {
+        var factor: Double
+        var label: String
+        var percent: Int { Int((factor * 100).rounded()) }
+    }
+
+    static let videoScales: [VideoScale] = [
+        .init(factor: 0.2, label: "20%"),
+        .init(factor: 0.25, label: "25%"),
+        .init(factor: 1.0 / 3, label: "33% (1/3)"),
+        .init(factor: 0.5, label: "50%"),
+        .init(factor: 2.0 / 3, label: "67% (2/3)"),
+        .init(factor: 0.75, label: "75%"),
+        .init(factor: 1, label: "100%"),
+        .init(factor: 1.5, label: "150%"),
+        .init(factor: 2, label: "200%"),
+    ]
+
+    /// Toolbar text, e.g. "1920 x 1080 (100 %)".
+    var videoScaleText: String {
+        let pct = videoScalePercent.map { "\($0) %" } ?? "-- %"
+        guard videoSize.width > 0 else { return "(\(pct))" }
+        return "\(Int(videoSize.width)) x \(Int(videoSize.height)) (\(pct))"
+    }
+
+    /// How large the picture is shown relative to its native size (rounded %), for the toolbar.
+    var videoScalePercent: Int?
+    @ObservationIgnored private weak var videoHost: VideoHostView?
+
+    /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
+    /// 1920×1080 until a picture has been decoded.
+    private var nativeVideoSize: CGSize {
+        videoSize.width > 0 && videoSize.height > 0 ? videoSize : CGSize(width: 1920, height: 1080)
+    }
+
+    func videoHostDidLayout(_ host: VideoHostView) {
+        videoHost = host
+        updateVideoScale()
+    }
+
+    private func updateVideoScale() {
+        guard let host = videoHost, host.bounds.width > 0, host.bounds.height > 0 else { return }
+        let src = nativeVideoSize
+        let fit = min(host.bounds.width / src.width, host.bounds.height / src.height)
+        let pct = Int((fit * 100).rounded())
+        if pct != videoScalePercent { videoScalePercent = pct }
+    }
+
+    /// Resize the window so the picture is shown at `scale` of its native size (1 px = 1 pt,
+    /// like QuickTime's "Actual Size"). The panel and status bar keep their size; the window
+    /// keeps its top-left corner and is shrunk to fit the screen if needed.
+    func setVideoScale(_ scale: VideoScale) {
+        guard let host = videoHost, let window = host.window, !window.styleMask.contains(.fullScreen) else { return }
+        let src = nativeVideoSize
+        var target = CGSize(width: (src.width * scale.factor).rounded(),
+                            height: (src.height * scale.factor).rounded())
+        var frame = window.frame
+        let extra = CGSize(width: frame.width - host.bounds.width, height: frame.height - host.bounds.height)
+        if let visible = window.screen?.visibleFrame {
+            let k = min(1, (visible.width - extra.width) / target.width, (visible.height - extra.height) / target.height)
+            target = CGSize(width: (target.width * k).rounded(.down), height: (target.height * k).rounded(.down))
+        }
+        let size = CGSize(width: target.width + extra.width, height: target.height + extra.height)
+        let top = frame.maxY
+        frame.size = size
+        frame.origin.y = top - size.height
+        if let visible = window.screen?.visibleFrame {
+            frame.origin.x = min(max(frame.origin.x, visible.minX), visible.maxX - frame.width)
+            frame.origin.y = min(max(frame.origin.y, visible.minY), visible.maxY - frame.height)
+        }
+        window.setFrame(frame, display: true, animate: true)
     }
 
     // MARK: - Display helpers
