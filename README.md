@@ -349,4 +349,5 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 BonView のソースコードは [MIT License](LICENSE) で公開しています。
 
 - BonDriverProxy のプロトコル実装は [BonDriverProxy_Linux](https://github.com/u-n-k-n-o-w-n/BonDriverProxy_Linux)（MIT License）を、BonDriverTunnel のプロトコル実装は [BonDriverTunnel](https://github.com/xtne6f/BonDriverTunnel)（MIT License）を参考に、Swift で書き直したものです。
+- ARIB 外字（追加記号・追加漢字）の Unicode 対応表は [libaribcaption](https://github.com/xqq/libaribcaption)（ISC 形式のライセンス）のものを使っています（`Sources/TSCore/ARIBGaiji.swift` に著作権表示を記載）。
 - FFmpeg は LGPL / GPL のソフトウェアです。Homebrew の FFmpeg は GPL 構成でビルドされているため、それにリンクしたバイナリを配布する場合は GPL の条件に従う必要があります。
