@@ -69,8 +69,15 @@ struct ContentView: View {
                 }
                 .help("画面サイズ")
                 .fixedSize()
-                Toggle(isOn: $model.showCaptions) { Label("字幕", systemImage: "captions.bubble") }
-                    .help(model.selection?.caption == nil ? "字幕（この番組には字幕がありません）" : "字幕")
+                // Filled + accent colour when on, outline + dimmed when off (a toolbar Toggle's
+                // pressed state is too subtle to read at a glance).
+                Button { model.showCaptions.toggle() } label: {
+                    Label(model.showCaptions ? "字幕を隠す" : "字幕を表示",
+                          systemImage: model.showCaptions ? "captions.bubble.fill" : "captions.bubble")
+                        .foregroundStyle(model.showCaptions ? Color.accentColor : Color.secondary)
+                }
+                .help((model.showCaptions ? "字幕: オン" : "字幕: オフ")
+                      + (model.selection?.caption == nil ? "（この番組には字幕がありません）" : ""))
                 Button { model.showPanel.toggle() } label: { Label("パネル", systemImage: "sidebar.right") }
             }
         }
