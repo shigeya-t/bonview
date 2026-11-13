@@ -256,11 +256,13 @@ private struct ServicePanel: View {
                     .pickerStyle(.inline).labelsHidden()
                 }
             }
-            Section("二重音声") {
-                Picker("二重音声", selection: $model.dualMono) {
-                    ForEach(DualMonoMode.allCases, id: \.self) { Text($0.label).tag($0) }
+            if model.status.isDualMono {
+                Section("二重音声") {
+                    Picker("二重音声", selection: $model.dualMono) {
+                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
                 }
-                .pickerStyle(.segmented).labelsHidden()
             }
         }
         .listStyle(.sidebar)

@@ -33,6 +33,8 @@ public struct PlayerStatus: Sendable, Equatable {
     public var bufferedSeconds: Double = 0
     public var videoCodec = ""
     public var audioCodec = ""
+    /// The current audio is 二重音声 (two mono programmes, ADTS AAC only).
+    public var isDualMono = false
 
     public init() {}
 }
@@ -83,6 +85,9 @@ public final class TSPlayer: @unchecked Sendable {
     private var hardwareDecoding = true
     private var deinterlace = true
     private var dualMono: DualMonoMode = .both
+    /// Dual-mono detection with hysteresis: the flag flips after this many agreeing frames.
+    private var dualMonoVotes = 0
+    private static let dualMonoVotesNeeded = 3
 
     public init() {
         demuxer.onServicesChanged = { [weak self] s in self?.main { $0.onServicesChanged?(s) } }
@@ -129,6 +134,7 @@ public final class TSPlayer: @unchecked Sendable {
             presenter.flush()
             resetCaptions()
             status = PlayerStatus()
+            dualMonoVotes = 0
         }
     }
 
@@ -159,7 +165,7 @@ public final class TSPlayer: @unchecked Sendable {
     public func setDualMono(_ mode: DualMonoMode) {
         queue.async { [self] in
             dualMono = mode
-            audio?.setDualMonoMode(mode)
+            applyDualMono()
         }
     }
 
@@ -207,12 +213,13 @@ public final class TSPlayer: @unchecked Sendable {
         if let a = sel.audio {
             if audio?.pid != a.pid || audio?.streamType != a.streamType {
                 audio = MediaDecoder(streamType: a.streamType, pid: a.pid, hardware: false, deinterlace: false)
-                audio?.setDualMonoMode(dualMono)
+                setDualMonoDetected(false)
                 audio?.onAudio = { [weak self] s, f, c, r, pts in self?.presentAudio(s, f, c, r, pts) }
                 flushed = true
             }
         } else {
             audio = nil
+            setDualMonoDetected(false)
         }
         presenter.setExpectsAudio(audio != nil)
         if flushed { presenter.flush() }
@@ -227,6 +234,9 @@ public final class TSPlayer: @unchecked Sendable {
             v.feed(pes.payload, pts: pes.pts, dts: pes.dts)
         case .audio:
             guard let a = audio, a.pid == info.pid else { droppedPES += 1; return }
+            if a.streamType == 0x0F, let mode = AACChannelMode.detect(adts: pes.payload) {
+                observeChannelMode(mode == .dualMono)
+            }
             a.feed(pes.payload, pts: pes.pts, dts: pes.dts)
         case .caption:
             let languages = captions.languages
@@ -241,6 +251,30 @@ public final class TSPlayer: @unchecked Sendable {
             guard superimpose.feed(pes.payload) else { return }
             enqueueCaption(pes, superimpose: true, superimpose.frame)
         }
+    }
+
+    // MARK: - Dual mono
+
+    private func observeChannelMode(_ isDual: Bool) {
+        guard isDual != status.isDualMono else { dualMonoVotes = 0; return }
+        dualMonoVotes += 1
+        if dualMonoVotes >= Self.dualMonoVotesNeeded { setDualMonoDetected(isDual) }
+    }
+
+    private func setDualMonoDetected(_ value: Bool) {
+        dualMonoVotes = 0
+        let changed = status.isDualMono != value
+        status.isDualMono = value
+        applyDualMono()
+        if changed {
+            let s = status
+            main { $0.onStatus?(s) }
+        }
+    }
+
+    /// The 主/副 choice only applies to dual-mono audio; ordinary stereo is always played as is.
+    private func applyDualMono() {
+        audio?.setDualMonoMode(status.isDualMono ? dualMono : .both)
     }
 
     private func enqueueCaption(_ pes: PESPacket, superimpose: Bool, _ frame: CaptionFrame) {

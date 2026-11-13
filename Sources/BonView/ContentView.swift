@@ -1,5 +1,6 @@
 import AVFoundation
 import BonDriver
+import MediaCore
 import SwiftUI
 import TSCore
 
@@ -59,6 +60,15 @@ struct ContentView: View {
                     Label("消音", systemImage: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 }
                 Slider(value: $model.volume, in: 0...1).frame(width: 90)
+                // Only while the programme actually is 二重音声 (e.g. bilingual broadcasts).
+                if model.status.isDualMono {
+                    Picker("二重音声", selection: $model.dualMono) {
+                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text($0.shortLabel).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .fixedSize()
+                    .help("二重音声: \(model.dualMono.label)")
+                }
                 Menu {
                     ForEach(AppModel.videoScales, id: \.self) { scale in
                         Button {
@@ -208,6 +218,13 @@ struct StatusBar: View {
                     .overlay(RoundedRectangle(cornerRadius: 3).stroke(.secondary))
                     .foregroundStyle(model.showCaptions ? .primary : .secondary)
                     .help(model.showCaptions ? "字幕あり（表示中）" : "字幕あり（非表示）")
+            }
+            if model.status.isDualMono {
+                Text("二重音声")
+                    .font(.caption)
+                    .padding(.horizontal, 4)
+                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(.secondary))
+                    .help("二重音声: \(model.dualMono.label)")
             }
             if case .connected = model.state {
                 Label(model.signalText, systemImage: "antenna.radiowaves.left.and.right")

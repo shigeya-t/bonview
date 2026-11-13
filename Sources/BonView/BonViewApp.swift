@@ -102,10 +102,11 @@ struct AppCommands: Commands {
             Button("音量を下げる") { model.volume = max(0, model.volume - 0.05) }.keyboardShortcut("-", modifiers: .command)
             Divider()
             Picker("二重音声", selection: Binding(get: { model.dualMono }, set: { model.dualMono = $0 })) {
-                Text("主+副").tag(DualMonoMode.both)
                 Text("主音声").tag(DualMonoMode.main)
                 Text("副音声").tag(DualMonoMode.sub)
+                Text("主+副").tag(DualMonoMode.both)
             }
+            .disabled(!model.status.isDualMono)
         }
         CommandGroup(after: .toolbar) {
             Menu("画面サイズ") {

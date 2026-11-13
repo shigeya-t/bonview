@@ -53,6 +53,15 @@ public enum DualMonoMode: Int32, CaseIterable, Sendable {
     case main = 1
     case sub = 2
 
+    /// Short form for the toolbar switch.
+    public var shortLabel: String {
+        switch self {
+        case .both: return "主+副"
+        case .main: return "主"
+        case .sub: return "副"
+        }
+    }
+
     public var label: String {
         switch self {
         case .both: return "主+副"
