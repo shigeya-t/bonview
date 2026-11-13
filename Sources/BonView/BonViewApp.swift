@@ -90,8 +90,8 @@ struct AppCommands: Commands {
         }
         CommandGroup(after: .toolbar) {
             Menu("画面サイズ") {
-                ForEach(Array(AppModel.videoScales.enumerated()), id: \.offset) { i, pct in
-                    Button("\(pct)%") { model.setVideoScale(pct) }
+                ForEach(Array(AppModel.videoScales.enumerated()), id: \.offset) { i, scale in
+                    Button(scale.label) { model.setVideoScale(scale) }
                         .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
                 }
             }

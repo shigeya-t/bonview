@@ -365,7 +365,30 @@ final class AppModel {
 
     // MARK: - Video size (50% / 100% / …)
 
-    static let videoScales: [Int] = [50, 75, 100, 150, 200]
+    struct VideoScale: Hashable {
+        var factor: Double
+        var label: String
+        var percent: Int { Int((factor * 100).rounded()) }
+    }
+
+    static let videoScales: [VideoScale] = [
+        .init(factor: 0.2, label: "20%"),
+        .init(factor: 0.25, label: "25%"),
+        .init(factor: 1.0 / 3, label: "33% (1/3)"),
+        .init(factor: 0.5, label: "50%"),
+        .init(factor: 2.0 / 3, label: "67% (2/3)"),
+        .init(factor: 0.75, label: "75%"),
+        .init(factor: 1, label: "100%"),
+        .init(factor: 1.5, label: "150%"),
+        .init(factor: 2, label: "200%"),
+    ]
+
+    /// Toolbar text, e.g. "1920 x 1080 (100 %)".
+    var videoScaleText: String {
+        let pct = videoScalePercent.map { "\($0) %" } ?? "-- %"
+        guard videoSize.width > 0 else { return "(\(pct))" }
+        return "\(Int(videoSize.width)) x \(Int(videoSize.height)) (\(pct))"
+    }
 
     /// How large the picture is shown relative to its native size (rounded %), for the toolbar.
     var videoScalePercent: Int?
@@ -390,14 +413,14 @@ final class AppModel {
         if pct != videoScalePercent { videoScalePercent = pct }
     }
 
-    /// Resize the window so the picture is shown at `percent` of its native size (1 px = 1 pt,
+    /// Resize the window so the picture is shown at `scale` of its native size (1 px = 1 pt,
     /// like QuickTime's "Actual Size"). The panel and status bar keep their size; the window
     /// keeps its top-left corner and is shrunk to fit the screen if needed.
-    func setVideoScale(_ percent: Int) {
+    func setVideoScale(_ scale: VideoScale) {
         guard let host = videoHost, let window = host.window, !window.styleMask.contains(.fullScreen) else { return }
         let src = nativeVideoSize
-        var target = CGSize(width: (src.width * CGFloat(percent) / 100).rounded(),
-                            height: (src.height * CGFloat(percent) / 100).rounded())
+        var target = CGSize(width: (src.width * scale.factor).rounded(),
+                            height: (src.height * scale.factor).rounded())
         var frame = window.frame
         let extra = CGSize(width: frame.width - host.bounds.width, height: frame.height - host.bounds.height)
         if let visible = window.screen?.visibleFrame {

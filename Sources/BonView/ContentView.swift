@@ -49,19 +49,19 @@ struct ContentView: View {
                 }
                 Slider(value: $model.volume, in: 0...1).frame(width: 90)
                 Menu {
-                    ForEach(AppModel.videoScales, id: \.self) { pct in
+                    ForEach(AppModel.videoScales, id: \.self) { scale in
                         Button {
-                            model.setVideoScale(pct)
+                            model.setVideoScale(scale)
                         } label: {
-                            if pct == model.videoScalePercent {
-                                Label("\(pct)%", systemImage: "checkmark")
+                            if scale.percent == model.videoScalePercent {
+                                Label(scale.label, systemImage: "checkmark")
                             } else {
-                                Text("\(pct)%")
+                                Text(scale.label)
                             }
                         }
                     }
                 } label: {
-                    Text(model.videoScalePercent.map { "\($0)%" } ?? "サイズ").monospacedDigit()
+                    Text(model.videoScaleText).monospacedDigit()
                 }
                 .help("画面サイズ")
                 .fixedSize()
