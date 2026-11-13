@@ -115,10 +115,10 @@ class Session:
                     self.send(packet(cmd, b"\x01"))
                 elif cmd == ENUM_TUNING_SPACE:
                     (i,) = struct.unpack(">I", body)
-                    self.send(packet(cmd, wstr("Mock" if i == 0 else None)))
+                    self.send(packet(cmd, wstr(SPACE_NAME if i == 0 else None)))
                 elif cmd == ENUM_CHANNEL_NAME:
                     sp, ch = struct.unpack(">II", body[:8])
-                    name = os.path.basename(self.files[ch]) if sp == 0 and ch < len(self.files) else None
+                    name = channel_name(self.files[ch]) if sp == 0 and ch < len(self.files) else None
                     self.send(packet(cmd, wstr(name)))
                 elif cmd == SET_CHANNEL2:
                     sp, ch, lock = struct.unpack(">IIB", body)
@@ -193,9 +193,9 @@ class TunnelSession:
                 elif name == "GTun":
                     reply = ws("Mock Tunnel")
                 elif name == "ETun":
-                    reply = ws("Mock" if p1 == 0 else None)
+                    reply = ws(SPACE_NAME if p1 == 0 else None)
                 elif name == "ECha":
-                    reply = ws(os.path.basename(self.files[p2]) if p1 == 0 and p2 < len(self.files) else None)
+                    reply = ws(channel_name(self.files[p2]) if p1 == 0 and p2 < len(self.files) else None)
                 elif name == "SCh2":
                     ok = p1 == 0 and p2 < len(self.files)
                     print(f"SCh2 space={p1} ch={p2}")
@@ -238,14 +238,25 @@ def listen(port):
     return srv
 
 
+SPACE_NAME = "Mock"
+
+
+def channel_name(path):
+    """Channel name shown to clients: the file name without extension (e.g. 13Ch.ts → 13Ch)."""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
 def main():
+    global SPACE_NAME
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=1192)
     ap.add_argument("--rate", type=float, default=16.0, help="stream rate in Mbps")
     ap.add_argument("--tunnel-port", type=int, default=1193, help="BonDriverTunnel port (0 to disable)")
     ap.add_argument("--origin", default="Mock", help="BonDriverTunnel origin name (BonDriver_<origin>.dll)")
+    ap.add_argument("--space-name", default="Mock", help="tuning space name reported to clients")
     ap.add_argument("files", nargs="+")
     a = ap.parse_args()
+    SPACE_NAME = a.space_name
     if a.tunnel_port:
         tsrv = listen(a.tunnel_port)
         print(f"BonDriverTunnel on 127.0.0.1:{a.tunnel_port} (origin {a.origin})")

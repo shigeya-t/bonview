@@ -15,6 +15,14 @@ Mac に直接つなげられるテレビチューナーはほとんどありま�
 
 Mac 側にドライバーやカードリーダーは要りません。
 
+<p align="center">
+  <img src="docs/images/screenshot-channels.png" width="800" alt="BonView: チャンネル一覧（チャンネルスキャン後）">
+</p>
+<p align="center">
+  <img src="docs/images/screenshot-program.png" width="800" alt="BonView: 番組情報パネル">
+</p>
+<p align="center"><sub>※ 画面は付属スクリプトで生成したテスト映像（架空の局・番組）をモックサーバーから配信したものです。</sub></p>
+
 ```
 ┌──────────── Windows / Linux ────────────┐            ┌──────── Mac ────────┐
 │ チューナー → BonDriver_xxx.dll            │            │                     │
@@ -254,6 +262,14 @@ swift run bdpcat --tunnel -a 192.168.0.10 -d PT-T --list                # BonDri
 
 ```bash
 scripts/mock_bdp_server.py --port 1192 --tunnel-port 1193 --origin PT-T ch1.ts ch2.ts
+```
+
+手元に TS ファイルがない場合は、`scripts/make_demo_ts.py` でデモ用の TS を作れます。ffmpeg のテスト映像に、ARIB 形式の局名（SDT）、番組情報（EIT 現在 / 次）、時刻（TOT）を加えたものです。
+
+```bash
+scripts/make_demo_ts.py 21Ch.ts --sid 1024 --name "デモテレビ" --title "デモ番組" --next "ニュース"
+scripts/make_demo_ts.py 24Ch.ts --sid 1056 --name "サンプル放送" --pattern smptehdbars --tone 660
+scripts/mock_bdp_server.py --space-name "地デジ(UHF)" 21Ch.ts 24Ch.ts    # チャンネル名はファイル名（拡張子なし）
 ```
 
 BonView ではアドレス `127.0.0.1` に接続します。BonDriver は任意の名前（例 `BonDriver_Mock.dll`）で、Tunnel では ORIGIN に `PT-T` を指定します。

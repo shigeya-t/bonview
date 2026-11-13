@@ -42,7 +42,8 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 | `Sources/BonView` | SwiftUI app. `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
 | `Sources/bdpcat` | CLI client. |
 | `Tests/*` | Swift Testing. `MockProxyServer`/`MockTunnelServer` speak the real protocols in-process; `DecodeTests`/`ChannelScanTests` generate TS with the ffmpeg CLI and skip when it is missing. |
-| `scripts/` | `bundle.sh`, `make_icon.swift`, `mock_bdp_server.py`. |
+| `scripts/` | `bundle.sh`, `make_icon.swift`, `mock_bdp_server.py`, `make_demo_ts.py` (test-pattern TS with ARIB SDT/EIT/TOT, used for README screenshots). |
+| `docs/images/` | README screenshots. Only use generated demo streams — never real broadcast footage. |
 
 ## Things that have bitten us
 
