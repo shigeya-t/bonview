@@ -26,6 +26,16 @@ public struct StreamSelection: Equatable, Sendable {
     public var superimpose: ElementaryStreamInfo? = nil
 }
 
+/// Present or following event of any service in the network, from EIT p/f actual (0x4E) or
+/// other (0x4F). `event` is nil when the section carries no event (no programme scheduled).
+public struct ServiceEventUpdate: Equatable, Sendable {
+    public var originalNetworkID: UInt16
+    public var transportStreamID: UInt16
+    public var serviceID: UInt16
+    public var isFollowing: Bool
+    public var event: EventInfo?
+}
+
 public struct DemuxStats: Sendable {
     public var packets = 0
     public var bytes = 0
@@ -48,6 +58,8 @@ public final class TSDemuxer {
     public var onPES: ((Track, ElementaryStreamInfo, PESPacket) -> Void)?
     /// Present / following events of the selected service.
     public var onEventChanged: ((EventInfo?, EventInfo?) -> Void)?
+    /// Present / following events of every service seen in EIT p/f (actual and other), on change.
+    public var onServiceEvent: ((ServiceEventUpdate) -> Void)?
     public var onTime: ((Date) -> Void)?
 
     /// Service to select. nil → first TV service (excluding one-seg).
@@ -76,6 +88,8 @@ public final class TSDemuxer {
     private var pmts: [UInt16: PMT] = [:]       // program number → PMT
     private var sdtServices: [UInt16: SDT.Service] = [:]
     private var nit: NIT?
+    private struct PFKey: Hashable { var onid, tsid, sid: UInt16; var following: Bool }
+    private var pfEvents: [PFKey: EventInfo?] = [:]
 
     private static let nitPID: UInt16 = 0x0010
     private static let sdtPID: UInt16 = 0x0011
@@ -100,6 +114,7 @@ public final class TSDemuxer {
         remoteControlKeyID = nil
         hasNIT = false
         nit = nil
+        pfEvents.removeAll()
         presentEvent = nil
         followingEvent = nil
         stats = DemuxStats()
@@ -207,9 +222,16 @@ public final class TSDemuxer {
                 sdtServices[svc.serviceID] = svc
             }
             if changed { rebuildServices() }
-        case 0x4E where Self.eitPIDs.contains(pid):
-            guard let eit = EIT(s), eit.serviceID == selection?.serviceID else { return }
+        case 0x4E where Self.eitPIDs.contains(pid), 0x4F where Self.eitPIDs.contains(pid):
+            guard let eit = EIT(s), eit.sectionNumber <= 1 else { return }
             let ev = eit.events.first
+            let key = PFKey(onid: eit.originalNetworkID, tsid: eit.transportStreamID, sid: eit.serviceID, following: eit.sectionNumber == 1)
+            if pfEvents[key] != .some(ev) {
+                pfEvents[key] = .some(ev)
+                onServiceEvent?(ServiceEventUpdate(originalNetworkID: key.onid, transportStreamID: key.tsid, serviceID: key.sid,
+                                                   isFollowing: key.following, event: ev))
+            }
+            guard eit.tableID == 0x4E, eit.serviceID == selection?.serviceID else { return }
             if eit.sectionNumber == 0 {
                 if ev != presentEvent { presentEvent = ev; onEventChanged?(presentEvent, followingEvent) }
             } else if eit.sectionNumber == 1 {

@@ -78,6 +78,12 @@ final class AppModel {
         scannedEntries.filter { !hiddenEntries.contains($0.id) }
     }
 
+    /// Programme on air on a scanned service, if its EIT has been seen.
+    func currentProgram(_ e: ScannedEntry) -> EventInfo? {
+        programCache.currentEvent(originalNetworkID: e.channel.originalNetworkID, transportStreamID: e.channel.transportStreamID,
+                                  serviceID: e.service.serviceID, at: broadcastTime ?? Date())
+    }
+
     func isHidden(_ e: ScannedEntry) -> Bool { hiddenEntries.contains(e.id) }
 
     func setHidden(_ e: ScannedEntry, _ hidden: Bool) {
@@ -99,6 +105,8 @@ final class AppModel {
     var selection: StreamSelection?
     var presentEvent: EventInfo?
     var followingEvent: EventInfo?
+    /// Present / following events of every service seen while watching (channel list).
+    var programCache = ProgramCache()
     var broadcastTime: Date?
     var status = PlayerStatus()
     var videoSize: CGSize = .zero
@@ -164,6 +172,7 @@ final class AppModel {
             }
         }
         player.onEventChanged = { [weak self] p, f in self?.presentEvent = p; self?.followingEvent = f }
+        player.onServiceEvent = { [weak self] in self?.programCache.update($0) }
         player.onTime = { [weak self] in self?.broadcastTime = $0 }
         player.onStatus = { [weak self] in self?.status = $0 }
         player.onCaption = { [weak self] in self?.captionFrame = $0 }

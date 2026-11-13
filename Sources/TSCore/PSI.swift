@@ -271,6 +271,8 @@ public struct EventInfo: Equatable, Sendable {
 public struct EIT {
     public var tableID: UInt8
     public var serviceID: UInt16
+    public var transportStreamID: UInt16
+    public var originalNetworkID: UInt16
     public var sectionNumber: UInt8
     public var events: [EventInfo]
 
@@ -278,6 +280,8 @@ public struct EIT {
         guard (0x4E...0x6F).contains(s[0]), let h = SectionHeader(s), s.count >= 18 else { return nil }
         tableID = s[0]
         serviceID = h.tableIDExtension
+        transportStreamID = s.u16(8)
+        originalNetworkID = s.u16(10)
         sectionNumber = h.sectionNumber
         events = []
         var i = 14

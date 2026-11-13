@@ -112,12 +112,13 @@ private struct ChannelPanel: View {
                 let ids = items.map(\.id)
                 Section(space) {
                     ForEach(items) { e in
-                        HStack(spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
                             if let n = e.numberText {
                                 Text(n).monospacedDigit().foregroundStyle(.secondary)
                             }
-                            Text(e.service.displayName)
-                            Spacer()
+                            Text(e.service.displayName).fontWeight(.semibold).fixedSize()
+                            programTitle(e)
+                            Spacer(minLength: 0)
                             if isCurrent(e) {
                                 Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
                             }
@@ -166,16 +167,18 @@ private struct ChannelPanel: View {
                             .onTapGesture { model.tune(ch) }
                         } else {
                             ForEach(Array(services.enumerated()), id: \.element.id) { i, e in
-                                HStack(spacing: 8) {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
                                     Text(i == 0 ? ch.name : "").monospacedDigit()
                                         .frame(minWidth: 44, alignment: .leading)
                                     if let n = e.numberText {
                                         Text(n).monospacedDigit().foregroundStyle(.secondary)
                                     }
                                     Text(e.service.displayName)
+                                        .fontWeight(.semibold)
                                         .foregroundStyle(model.isHidden(e) ? .secondary : .primary)
                                         .lineLimit(1)
-                                    Spacer()
+                                    programTitle(e)
+                                    Spacer(minLength: 0)
                                     if isCurrent(e) {
                                         Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
                                     }
@@ -193,6 +196,19 @@ private struct ChannelPanel: View {
             }
         }
         .listStyle(.sidebar)
+    }
+
+    /// Current programme title after the service name: smaller and grey so it reads apart from the
+    /// (semibold) name. Truncated; full title in the tooltip.
+    @ViewBuilder private func programTitle(_ e: AppModel.ScannedEntry) -> some View {
+        if let ev = model.currentProgram(e), !ev.title.isEmpty {
+            Text(ev.title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(ev.start == nil ? ev.title : "\(EventFormat.timeRange(ev))  \(ev.title)")
+        }
     }
 
     private func isCurrent(_ e: AppModel.ScannedEntry) -> Bool {

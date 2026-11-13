@@ -203,3 +203,67 @@ enum TSBuilder {
         #expect(s.syncLossCount == 1)
     }
 }
+
+// MARK: - EIT p/f for all services
+
+@Suite struct ProgramCacheTests {
+    /// EIT p/f section with one event (title in ASCII via ESC ( J), or none.
+    static func eit(table: UInt8, sid: UInt16, tsid: UInt16, onid: UInt16, section: UInt8,
+                    eventID: UInt16, start: [UInt8], durationBCD: [UInt8], title: String?) -> [UInt8] {
+        var body: [UInt8] = [UInt8(tsid >> 8), UInt8(tsid & 0xFF), UInt8(onid >> 8), UInt8(onid & 0xFF), 0x01, table]
+        if let title {
+            let name: [UInt8] = [0x1B, 0x28, 0x4A] + Array(title.utf8)
+            let desc: [UInt8] = [0x4D, UInt8(5 + name.count), 0x6A, 0x70, 0x6E, UInt8(name.count)] + name + [0]
+            body += [UInt8(eventID >> 8), UInt8(eventID & 0xFF)] + start + durationBCD
+                + [0x80 | UInt8(desc.count >> 8), UInt8(desc.count & 0xFF)] + desc
+        }
+        return TSBuilder.section(tableID: table, ext: sid, sectionNumber: section, body: body)
+    }
+
+    // MJD 60310 = 2024-01-01; 12:00:00 JST
+    static let noon: [UInt8] = [0xEB, 0x96, 0x12, 0x00, 0x00]
+    static let oneThirty: [UInt8] = [0xEB, 0x96, 0x13, 0x30, 0x00]
+
+    @Test func demuxReportsActualAndOther() {
+        var cc: UInt8 = 0
+        var ts = TSBuilder.packets(pid: 0x12, payload: Self.eit(table: 0x4E, sid: 0x0400, tsid: 0x7FE1, onid: 0x7FE1, section: 0,
+                                                                eventID: 1, start: Self.noon, durationBCD: [0x01, 0x00, 0x00], title: "NEWS"),
+                                   isSection: true, cc: &cc)
+        ts += TSBuilder.packets(pid: 0x12, payload: Self.eit(table: 0x4F, sid: 0x0065, tsid: 0x4010, onid: 4, section: 1,
+                                                             eventID: 2, start: Self.oneThirty, durationBCD: [0x00, 0x30, 0x00], title: "MOVIE"),
+                                isSection: true, cc: &cc)
+        // Same section again: no duplicate callback.
+        ts += TSBuilder.packets(pid: 0x12, payload: Self.eit(table: 0x4E, sid: 0x0400, tsid: 0x7FE1, onid: 0x7FE1, section: 0,
+                                                             eventID: 1, start: Self.noon, durationBCD: [0x01, 0x00, 0x00], title: "NEWS"),
+                                isSection: true, cc: &cc)
+        let demux = TSDemuxer()
+        var updates: [ServiceEventUpdate] = []
+        demux.onServiceEvent = { updates.append($0) }
+        demux.feed(Data(ts))
+        #expect(updates.count == 2)
+        #expect(updates.first?.serviceID == 0x0400 && updates.first?.isFollowing == false)
+        #expect(updates.first?.event?.title == "NEWS")
+        #expect(updates.last?.originalNetworkID == 4 && updates.last?.transportStreamID == 0x4010)
+        #expect(updates.last?.isFollowing == true && updates.last?.event?.title == "MOVIE")
+    }
+
+    @Test func currentEventFollowsClock() throws {
+        var cache = ProgramCache()
+        let present = try #require(EIT(Self.eit(table: 0x4E, sid: 1, tsid: 2, onid: 3, section: 0, eventID: 1, start: Self.noon,
+                                                durationBCD: [0x01, 0x00, 0x00], title: "A")))
+        let following = try #require(EIT(Self.eit(table: 0x4E, sid: 1, tsid: 2, onid: 3, section: 1, eventID: 2, start: Self.oneThirty,
+                                                  durationBCD: [0x00, 0x30, 0x00], title: "B")))
+        cache.update(ServiceEventUpdate(originalNetworkID: 3, transportStreamID: 2, serviceID: 1, isFollowing: false, event: present.events.first))
+        cache.update(ServiceEventUpdate(originalNetworkID: 3, transportStreamID: 2, serviceID: 1, isFollowing: true, event: following.events.first))
+        let start = try #require(present.events.first?.start)
+        func title(_ offset: TimeInterval, onid: UInt16? = 3) -> String? {
+            cache.currentEvent(originalNetworkID: onid, transportStreamID: 2, serviceID: 1, at: start.addingTimeInterval(offset))?.title
+        }
+        #expect(title(10 * 60) == "A")
+        #expect(title(10 * 60, onid: nil) == "A")
+        #expect(title(10 * 60, onid: 9) == nil)
+        #expect(title(65 * 60) == nil)       // between A's end (13:00) and B's start (13:30)
+        #expect(title(95 * 60) == "B")
+        #expect(title(125 * 60) == nil)      // both over
+    }
+}
