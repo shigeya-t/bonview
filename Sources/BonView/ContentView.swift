@@ -60,25 +60,6 @@ struct ContentView: View {
                     Label("消音", systemImage: model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                 }
                 Slider(value: $model.volume, in: 0...1).frame(width: 90)
-                // Only when there is a choice: several audio ES (主音声/副音声, 解説 …) and/or
-                // 二重音声 (e.g. bilingual broadcasts).
-                if let sel = model.selection, sel.audioStreams.count > 1 {
-                    let labels = model.audioStreamLabels
-                    Picker("音声", selection: $model.audioIndex) {
-                        ForEach(labels.indices, id: \.self) { Text(labels[$0]).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .help("音声切替: \(labels.indices.contains(model.audioIndex) ? labels[model.audioIndex] : "")")
-                }
-                if model.status.isDualMono {
-                    Picker("二重音声", selection: $model.dualMono) {
-                        ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text(model.dualMonoLabel($0, short: true)).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
-                    .help("二重音声: \(model.dualMonoLabel(model.dualMono))")
-                }
                 Menu {
                     ForEach(AppModel.videoScales, id: \.self) { scale in
                         Button {
@@ -219,6 +200,7 @@ struct StatusBar: View {
             Text(model.currentChannel?.name ?? "—").lineLimit(1)
             if let ev = model.presentEvent {
                 Text("\(EventFormat.timeRange(ev))  \(ev.title)").lineLimit(1).truncationMode(.tail)
+                    .layoutPriority(-1) // give way to the audio switches
             }
             Spacer(minLength: 8)
             if model.selection?.caption != nil {
@@ -229,13 +211,7 @@ struct StatusBar: View {
                     .foregroundStyle(model.showCaptions ? .primary : .secondary)
                     .help(model.showCaptions ? "字幕あり（表示中）" : "字幕あり（非表示）")
             }
-            if model.status.isDualMono {
-                Text("二重音声")
-                    .font(.caption)
-                    .padding(.horizontal, 4)
-                    .overlay(RoundedRectangle(cornerRadius: 3).stroke(.secondary))
-                    .help("二重音声: \(model.dualMonoLabel(model.dualMono))")
-            }
+            AudioSwitches()
             if case .connected = model.state {
                 Label(model.signalText, systemImage: "antenna.radiowaves.left.and.right")
             }
@@ -252,6 +228,41 @@ struct StatusBar: View {
         .padding(.horizontal, 10)
         .frame(height: 24)
         .background(.bar)
+    }
+}
+
+/// 音声切替 / 二重音声 switches, shown only when there is a choice. They live in the status bar
+/// rather than the toolbar: NSToolbar does not re-lay out the following items when a SwiftUI
+/// toolbar item appears mid-session, so they ended up overlapping.
+struct AudioSwitches: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        if let sel = model.selection, sel.audioStreams.count > 1 {
+            let labels = model.audioStreamLabels
+            Picker("音声", selection: $model.audioIndex) {
+                ForEach(labels.indices, id: \.self) { Text(labels[$0]).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .controlSize(.small)
+            .fixedSize()
+            .help("音声切替: \(labels.indices.contains(model.audioIndex) ? labels[model.audioIndex] : "")")
+        }
+        if model.status.isDualMono {
+            HStack(spacing: 4) {
+                Text("二重音声").font(.caption).foregroundStyle(.secondary)
+                Picker("二重音声", selection: $model.dualMono) {
+                    ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text(model.dualMonoLabel($0, short: true)).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+            }
+            .help("二重音声: \(model.dualMonoLabel(model.dualMono))")
+        }
     }
 }
 
