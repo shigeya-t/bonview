@@ -45,6 +45,8 @@ public final class TSPlayer: @unchecked Sendable {
     public var onServicesChanged: (([ServiceInfo]) -> Void)?
     public var onSelectionChanged: ((StreamSelection?) -> Void)?
     public var onEventChanged: ((EventInfo?, EventInfo?) -> Void)?
+    /// Present / following events of any service (EIT p/f actual and other), on the main thread.
+    public var onServiceEvent: ((ServiceEventUpdate) -> Void)?
     public var onTime: ((Date) -> Void)?
     public var onStatus: ((PlayerStatus) -> Void)?
     public var onVideoSizeChanged: ((CGSize) -> Void)?
@@ -85,6 +87,7 @@ public final class TSPlayer: @unchecked Sendable {
     public init() {
         demuxer.onServicesChanged = { [weak self] s in self?.main { $0.onServicesChanged?(s) } }
         demuxer.onEventChanged = { [weak self] p, f in self?.main { $0.onEventChanged?(p, f) } }
+        demuxer.onServiceEvent = { [weak self] u in self?.main { $0.onServiceEvent?(u) } }
         demuxer.onTime = { [weak self] t in self?.main { $0.onTime?(t) } }
         demuxer.onSelectionChanged = { [weak self] sel in self?.selectionChanged(sel) }
         demuxer.onPES = { [weak self] track, info, pes in self?.handlePES(track, info, pes) }
