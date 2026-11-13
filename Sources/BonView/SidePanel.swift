@@ -1,4 +1,5 @@
 import BonDriver
+import ChannelScan
 import MediaCore
 import SwiftUI
 import TSCore
@@ -141,7 +142,9 @@ private struct ChannelPanel: View {
             Button("末尾へ移動") { model.moveEntries(ids, from: [i], to: ids.count) }.disabled(i == ids.count - 1)
             Divider()
             Button("非表示にする") { model.setHidden(e, true) }
+            Divider()
         }
+        StationLinkMenu(name: e.service.name)
     }
 
     /// BonDriver's physical channels. After a scan each found service is listed next to its
@@ -186,6 +189,7 @@ private struct ChannelPanel: View {
                                 }
                                 .contentShape(Rectangle())
                                 .onTapGesture { model.tune(e.tuningChannel, service: e.service.serviceID) }
+                                .contextMenu { StationLinkMenu(name: e.service.name) }
                             }
                         }
                     }
@@ -223,6 +227,7 @@ private struct ServicePanel: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .contextMenu { StationLinkMenu(name: svc.name) }
                 }
             }
             if let sel = model.selection, sel.audioStreams.count > 1 {
@@ -243,6 +248,21 @@ private struct ServicePanel: View {
             }
         }
         .listStyle(.sidebar)
+    }
+}
+
+/// Right-click items that open the broadcaster's homepage (built-in table) or a web search.
+private struct StationLinkMenu: View {
+    let name: String
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        if let url = StationHomepage.url(for: name) {
+            Button("放送局のホームページを開く（\(url.host ?? "")）") { openURL(url) }
+        }
+        if !name.isEmpty, let url = StationHomepage.searchURL(for: name) {
+            Button("「\(name)」をWebで検索") { openURL(url) }
+        }
     }
 }
 
