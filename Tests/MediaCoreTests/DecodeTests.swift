@@ -76,7 +76,7 @@ import TSCore
             switch track {
             case .video: video?.feed(pes.payload, pts: pes.pts, dts: pes.dts)
             case .audio: audio?.feed(pes.payload, pts: pes.pts, dts: pes.dts)
-            case .caption: break
+            case .caption, .superimpose: break
             }
         }
         var i = 0

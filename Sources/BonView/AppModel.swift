@@ -102,8 +102,15 @@ final class AppModel {
     var broadcastTime: Date?
     var status = PlayerStatus()
     var videoSize: CGSize = .zero
-    /// Caption text currently on screen (top to bottom).
-    var captionLines: [String] = []
+    /// Caption plane currently on screen.
+    var captionFrame = CaptionFrame()
+    /// Superimpose (文字スーパー) plane currently on screen.
+    var superimposeFrame = CaptionFrame()
+    /// Caption languages of the current service (from the caption management data).
+    var captionLanguages: [CaptionLanguage] = []
+    var captionLanguageIndex = 0 {
+        didSet { if oldValue != captionLanguageIndex { player.selectCaptionLanguage(index: captionLanguageIndex) } }
+    }
 
     // MARK: Audio / video options
     var volume: Double = Preferences.double("volume", default: 0.8) {
@@ -126,6 +133,9 @@ final class AppModel {
     }
     var showCaptions = Preferences.bool("showCaptions", default: true) {
         didSet { UserDefaults.standard.set(showCaptions, forKey: "showCaptions") }
+    }
+    var captionStyle = CaptionStyle(rawValue: UserDefaults.standard.string(forKey: "captionStyle") ?? "") ?? .broadcast {
+        didSet { UserDefaults.standard.set(captionStyle.rawValue, forKey: "captionStyle") }
     }
     var showPanel = Preferences.bool("showPanel", default: true) {
         didSet { UserDefaults.standard.set(showPanel, forKey: "showPanel") }
@@ -156,7 +166,13 @@ final class AppModel {
         player.onEventChanged = { [weak self] p, f in self?.presentEvent = p; self?.followingEvent = f }
         player.onTime = { [weak self] in self?.broadcastTime = $0 }
         player.onStatus = { [weak self] in self?.status = $0 }
-        player.onCaption = { [weak self] in self?.captionLines = $0 }
+        player.onCaption = { [weak self] in self?.captionFrame = $0 }
+        player.onSuperimpose = { [weak self] in self?.superimposeFrame = $0 }
+        player.onCaptionLanguages = { [weak self] langs in
+            guard let self else { return }
+            self.captionLanguages = langs
+            if !langs.isEmpty, !langs.indices.contains(self.captionLanguageIndex) { self.captionLanguageIndex = 0 }
+        }
         player.onVideoSizeChanged = { [weak self] in
             self?.videoSize = $0
             self?.updateVideoScale()
@@ -517,5 +533,32 @@ final class TSRouter: @unchecked Sendable {
     func feed(_ data: Data) {
         lock.lock(); let t = target; lock.unlock()
         t?(data)
+    }
+}
+
+/// How captions are drawn.
+enum CaptionStyle: String, CaseIterable {
+    /// Position, size and colour as broadcast.
+    case broadcast
+    /// Plain text rows centred at the bottom of the picture.
+    case simple
+
+    var label: String {
+        switch self {
+        case .broadcast: return "放送どおりに表示"
+        case .simple: return "下部にまとめて表示"
+        }
+    }
+}
+
+extension CaptionLanguage {
+    var displayName: String {
+        switch code {
+        case "jpn": return "日本語"
+        case "eng": return "英語"
+        case "kor": return "韓国語"
+        case "zho", "chi": return "中国語"
+        default: return code
+        }
     }
 }

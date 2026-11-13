@@ -48,8 +48,12 @@ public final class TSPlayer: @unchecked Sendable {
     public var onTime: ((Date) -> Void)?
     public var onStatus: ((PlayerStatus) -> Void)?
     public var onVideoSizeChanged: ((CGSize) -> Void)?
-    /// Caption lines to show now (top to bottom; empty = nothing). Timed against the presenter clock.
-    public var onCaption: (([String]) -> Void)?
+    /// Caption plane to show now. Timed against the presenter clock.
+    public var onCaption: ((CaptionFrame) -> Void)?
+    /// Superimpose (文字スーパー) plane to show now.
+    public var onSuperimpose: ((CaptionFrame) -> Void)?
+    /// Caption languages from the management data (empty until received / no captions).
+    public var onCaptionLanguages: (([CaptionLanguage]) -> Void)?
 
     private let queue = DispatchQueue(label: "bonview.player", qos: .userInteractive)
     private let demuxer = TSDemuxer()
@@ -64,10 +68,14 @@ public final class TSPlayer: @unchecked Sendable {
     private var pendingBytes = 0
     private let pendingLock = NSLock()
     private var captions = CaptionDecoder()
+    private var superimpose = CaptionDecoder()
+    private var captionLanguage = 0
     /// Decoded caption states waiting for their presentation time.
-    private var pendingCaptions: [(time: Double, lines: [String])] = []
-    private var shownCaption: [String] = []
+    private var pendingCaptions: [(time: Double, superimpose: Bool, frame: CaptionFrame)] = []
+    private var shownCaption = CaptionFrame()
+    private var shownSuperimpose = CaptionFrame()
     private var captionPID: UInt16?
+    private var superimposePID: UInt16?
 
     // Options (read on the player queue).
     private var hardwareDecoding = true
@@ -173,13 +181,14 @@ public final class TSPlayer: @unchecked Sendable {
     // MARK: - Pipeline
 
     private func selectionChanged(_ sel: StreamSelection?) {
-        if let sel { makeDecoders(sel) } else { video = nil; audio = nil; captionPID = nil; resetCaptions() }
+        if let sel { makeDecoders(sel) } else { video = nil; audio = nil; captionPID = nil; superimposePID = nil; resetCaptions() }
         main { $0.onSelectionChanged?(sel) }
     }
 
     private func makeDecoders(_ sel: StreamSelection) {
-        if sel.caption?.pid != captionPID {
+        if sel.caption?.pid != captionPID || sel.superimpose?.pid != superimposePID {
             captionPID = sel.caption?.pid
+            superimposePID = sel.superimpose?.pid
             resetCaptions()
         }
         var flushed = false
@@ -217,37 +226,79 @@ public final class TSPlayer: @unchecked Sendable {
             guard let a = audio, a.pid == info.pid else { droppedPES += 1; return }
             a.feed(pes.payload, pts: pes.pts, dts: pes.dts)
         case .caption:
-            guard captions.feed(pes.payload) else { return }
-            // No PTS (asynchronous PES) → show as soon as possible.
-            let t = pes.pts.map { unwrap.seconds($0) } ?? -.infinity
-            pendingCaptions.append((t, captions.screen.lines))
-            if pendingCaptions.count > 64 { pendingCaptions.removeFirst(pendingCaptions.count - 64) }
+            let languages = captions.languages
+            let changed = captions.feed(pes.payload)
+            if captions.languages != languages {
+                let l = captions.languages
+                main { $0.onCaptionLanguages?(l) }
+            }
+            guard changed else { return }
+            enqueueCaption(pes, superimpose: false, captions.frame)
+        case .superimpose:
+            guard superimpose.feed(pes.payload) else { return }
+            enqueueCaption(pes, superimpose: true, superimpose.frame)
         }
+    }
+
+    private func enqueueCaption(_ pes: PESPacket, superimpose: Bool, _ frame: CaptionFrame) {
+        // No PTS (asynchronous PES, usual for superimpose) → show as soon as possible.
+        let t = pes.pts.map { unwrap.seconds($0) } ?? -.infinity
+        pendingCaptions.append((t, superimpose, frame))
+        if pendingCaptions.count > 64 { pendingCaptions.removeFirst(pendingCaptions.count - 64) }
     }
 
     // MARK: - Captions
 
+    public func selectCaptionLanguage(index: Int) {
+        queue.async { [self] in
+            captionLanguage = index
+            captions.languageIndex = index
+            pendingCaptions.removeAll { !$0.superimpose }
+            shownCaption = CaptionFrame()
+            main { $0.onCaption?(CaptionFrame()) }
+        }
+    }
+
     private func resetCaptions() {
         captions.reset()
+        superimpose.reset()
+        captions.languageIndex = captionLanguage
         pendingCaptions.removeAll()
-        if !shownCaption.isEmpty {
-            shownCaption = []
-            main { $0.onCaption?([]) }
+        main { $0.onCaptionLanguages?([]) }
+        if shownCaption != CaptionFrame() {
+            shownCaption = CaptionFrame()
+            main { $0.onCaption?(CaptionFrame()) }
+        }
+        if shownSuperimpose != CaptionFrame() {
+            shownSuperimpose = CaptionFrame()
+            main { $0.onSuperimpose?(CaptionFrame()) }
         }
     }
 
     /// Hands captions whose time has come to the main queue. Called after every input chunk.
     private func deliverCaptions() {
         guard !pendingCaptions.isEmpty, let clock = presenter.clockSeconds else { return }
-        var latest: [String]?
-        while let first = pendingCaptions.first,
-              first.time <= clock || first.time > clock + 10 { // > 10 s ahead: bogus PTS, show now
-            latest = first.lines
-            pendingCaptions.removeFirst()
+        var caption: CaptionFrame?, sup: CaptionFrame?
+        // Per plane, deliver the due prefix (latest state wins); the planes don't block each other.
+        // > 10 s ahead: bogus PTS, show now.
+        var blocked = (caption: false, superimpose: false)
+        pendingCaptions.removeAll { e in
+            let isBlocked = e.superimpose ? blocked.superimpose : blocked.caption
+            guard !isBlocked, e.time <= clock || e.time > clock + 10 else {
+                if e.superimpose { blocked.superimpose = true } else { blocked.caption = true }
+                return false
+            }
+            if e.superimpose { sup = e.frame } else { caption = e.frame }
+            return true
         }
-        guard let latest, latest != shownCaption else { return }
-        shownCaption = latest
-        main { $0.onCaption?(latest) }
+        if let caption, caption != shownCaption {
+            shownCaption = caption
+            main { $0.onCaption?(caption) }
+        }
+        if let sup, sup != shownSuperimpose {
+            shownSuperimpose = sup
+            main { $0.onSuperimpose?(sup) }
+        }
     }
 
     private func presentVideo(_ pb: CVPixelBuffer, _ pts: Int64?) {
