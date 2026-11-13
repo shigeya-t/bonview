@@ -53,14 +53,43 @@ final class AppModel {
     struct ScannedEntry: Identifiable, Hashable {
         var channel: ScannedChannel
         var service: ScannedService
+        /// Stable across rescans: "<space>-<channel>-<service id>".
         var id: String { "\(channel.id)-\(service.serviceID)" }
+        /// "081" etc., when known.
+        var numberText: String? { channel.threeDigitNumber(for: service).map { String(format: "%03d", $0) } }
         var tuningChannel: TuningSpace.Channel {
             TuningSpace.Channel(space: channel.space, index: channel.channel, name: channel.channelName)
         }
     }
 
+    /// User's channel-list order (entry IDs) and hidden entries, per profile.
+    var channelOrder: [String] = []
+    var hiddenEntries: Set<String> = []
+
+    /// All viewable services found by the scan, in the user's order (new ones after known ones,
+    /// in scan order).
     var scannedEntries: [ScannedEntry] {
-        scannedChannels.flatMap { ch in ch.services.filter(\.isViewable).map { ScannedEntry(channel: ch, service: $0) } }
+        let all = scannedChannels.flatMap { ch in ch.services.filter(\.isViewable).map { ScannedEntry(channel: ch, service: $0) } }
+        return ChannelListOrder.sorted(all, order: channelOrder, id: \.id)
+    }
+
+    /// Entries shown in the channel list and used by ⌘↑ / ⌘↓.
+    var visibleEntries: [ScannedEntry] {
+        scannedEntries.filter { !hiddenEntries.contains($0.id) }
+    }
+
+    func isHidden(_ e: ScannedEntry) -> Bool { hiddenEntries.contains(e.id) }
+
+    func setHidden(_ e: ScannedEntry, _ hidden: Bool) {
+        if hidden { hiddenEntries.insert(e.id) } else { hiddenEntries.remove(e.id) }
+        if let p = currentProfile { Preferences.setHiddenEntries(hiddenEntries, for: p.id) }
+    }
+
+    /// Reorder within one tuning space (`ids` is that space's visible list as displayed).
+    func moveEntries(_ ids: [String], from source: IndexSet, to destination: Int) {
+        let full = ChannelListOrder.move(ids, from: source, to: destination, in: scannedEntries.map(\.id))
+        channelOrder = full
+        if let p = currentProfile { Preferences.setChannelOrder(full, for: p.id) }
     }
 
     var isScanning: Bool { scan.map { !$0.finished } ?? false }
@@ -148,6 +177,8 @@ final class AppModel {
         generation += 1
         let gen = generation
         scannedChannels = Preferences.scanResult(for: profile.id)
+        channelOrder = Preferences.channelOrder(for: profile.id)
+        hiddenEntries = Preferences.hiddenEntries(for: profile.id)
         let router = self.router
         driverQueue.async { [weak self] in
             do {
@@ -165,7 +196,7 @@ final class AppModel {
                     self.state = .connected
                     let last = Preferences.lastChannel(for: profile.id)
                     let all = spaces.flatMap(\.channels)
-                    let firstScanned = self.scannedEntries.first?.tuningChannel
+                    let firstScanned = self.visibleEntries.first?.tuningChannel
                     if let ch = all.first(where: { $0.space == last?.0 && $0.index == last?.1 }) ?? firstScanned ?? all.first {
                         self.tune(ch)
                     }
@@ -246,7 +277,7 @@ final class AppModel {
 
     /// Next/previous channel within the current tuning space (like ↑/↓ on a TV remote).
     func stepChannel(_ delta: Int) {
-        let entries = scannedEntries
+        let entries = visibleEntries
         if !entries.isEmpty {
             let i = entries.firstIndex { $0.tuningChannel == currentChannel && $0.service.serviceID == selection?.serviceID }
                 ?? entries.firstIndex { $0.tuningChannel == currentChannel }
@@ -320,14 +351,27 @@ final class AppModel {
                     let kept = self.scannedChannels.filter { !selected.contains($0.space) }
                     self.scannedChannels = (kept + result).sorted { ($0.space, $0.channel) < ($1.space, $1.channel) }
                     Preferences.setScanResult(self.scannedChannels, for: profile.id)
+                    self.autoHideSubChannels(profile)
                 }
                 // Back to watching: the channel we were on, else the first one found.
                 self.currentChannel = nil
-                if let ch = self.lastTunedChannel(profile) ?? self.scannedEntries.first?.tuningChannel ?? self.spaces.first?.channels.first {
+                if let ch = self.lastTunedChannel(profile) ?? self.visibleEntries.first?.tuningChannel ?? self.spaces.first?.channels.first {
                     self.tune(ch)
                 }
             }
         }
+    }
+
+    /// Hide multi-programming sub-channels (same name as the main service on the same channel)
+    /// the first time they are found. Entries seen before keep whatever the user chose.
+    private func autoHideSubChannels(_ profile: ServerProfile) {
+        var known = Preferences.knownEntries(for: profile.id)
+        for e in scannedEntries where !known.contains(e.id) {
+            if e.channel.duplicateNameServiceIDs.contains(e.service.serviceID) { hiddenEntries.insert(e.id) }
+            known.insert(e.id)
+        }
+        Preferences.setHiddenEntries(hiddenEntries, for: profile.id)
+        Preferences.setKnownEntries(known, for: profile.id)
     }
 
     func cancelScan() {
@@ -337,6 +381,11 @@ final class AppModel {
     func clearScanResult() {
         guard let profile = currentProfile else { return }
         scannedChannels = []
+        channelOrder = []
+        hiddenEntries = []
+        Preferences.setChannelOrder([], for: profile.id)
+        Preferences.setHiddenEntries([], for: profile.id)
+        Preferences.setKnownEntries([], for: profile.id)
         Preferences.setScanResult([], for: profile.id)
     }
 

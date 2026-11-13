@@ -90,28 +90,104 @@ private struct ChannelPanel: View {
         }
     }
 
+    /// Scanned services in the user's order, hidden ones left out. Drag to reorder (within a
+    /// tuning space); click to tune.
     private var scannedList: some View {
-        let entries = model.scannedEntries
-        let groups = Dictionary(grouping: entries, by: \.channel.spaceName)
+        let entries = model.visibleEntries
         let order = entries.map(\.channel.spaceName).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
-        return List {
+        // Selection-driven list: clicking a row tunes it, and leaves the row free for the List's
+        // own drag-to-reorder (a tap gesture on the row would compete with the drag).
+        let selection = Binding<String?>(
+            get: { entries.first(where: isCurrent)?.id },
+            set: { id in
+                if let e = entries.first(where: { $0.id == id }) { model.tune(e.tuningChannel, service: e.service.serviceID) }
+            })
+        return List(selection: selection) {
+            if entries.isEmpty {
+                Text("すべてのチャンネルが非表示です。「物理チャンネル」から表示を切り替えられます。")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             ForEach(order, id: \.self) { space in
+                let items = entries.filter { $0.channel.spaceName == space }
+                let ids = items.map(\.id)
                 Section(space) {
-                    ForEach(groups[space] ?? []) { e in
-                        Button { model.tune(e.tuningChannel, service: e.service.serviceID) } label: {
+                    ForEach(items) { e in
+                        HStack(spacing: 8) {
+                            if let n = e.numberText {
+                                Text(n).monospacedDigit().foregroundStyle(.secondary)
+                            }
+                            Text(e.service.displayName)
+                            Spacer()
+                            if isCurrent(e) {
+                                Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
+                            }
+                        }
+                        .tag(e.id)
+                        .contextMenu { moveMenu(e, ids: ids) }
+                    }
+                    .onMove { from, to in model.moveEntries(ids, from: from, to: to) }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+    }
+
+    /// Right-click alternative to dragging.
+    @ViewBuilder private func moveMenu(_ e: AppModel.ScannedEntry, ids: [String]) -> some View {
+        if let i = ids.firstIndex(of: e.id) {
+            Button("先頭へ移動") { model.moveEntries(ids, from: [i], to: 0) }.disabled(i == 0)
+            Button("上へ移動") { model.moveEntries(ids, from: [i], to: i - 1) }.disabled(i == 0)
+            Button("下へ移動") { model.moveEntries(ids, from: [i], to: i + 2) }.disabled(i == ids.count - 1)
+            Button("末尾へ移動") { model.moveEntries(ids, from: [i], to: ids.count) }.disabled(i == ids.count - 1)
+            Divider()
+            Button("非表示にする") { model.setHidden(e, true) }
+        }
+    }
+
+    /// BonDriver's physical channels. After a scan each found service is listed next to its
+    /// channel with a "非表示" checkbox controlling the channel list.
+    private var physicalList: some View {
+        let byChannel = Dictionary(grouping: model.scannedEntries, by: \.channel.id)
+        return List {
+            ForEach(model.spaces) { space in
+                Section(space.name) {
+                    ForEach(space.channels) { ch in
+                        let services = byChannel[ch.id] ?? []
+                        if services.isEmpty {
                             HStack {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(e.service.displayName)
-                                    Text(e.channel.channelName).font(.caption).foregroundStyle(.secondary)
-                                }
+                                Text(ch.name).monospacedDigit()
+                                    .foregroundStyle(model.scannedChannels.isEmpty ? .primary : .secondary)
                                 Spacer()
-                                if e.tuningChannel == model.currentChannel && e.service.serviceID == model.selection?.serviceID {
+                                if ch == model.currentChannel {
                                     Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
                                 }
                             }
                             .contentShape(Rectangle())
+                            .onTapGesture { model.tune(ch) }
+                        } else {
+                            ForEach(Array(services.enumerated()), id: \.element.id) { i, e in
+                                HStack(spacing: 8) {
+                                    Text(i == 0 ? ch.name : "").monospacedDigit()
+                                        .frame(minWidth: 44, alignment: .leading)
+                                    if let n = e.numberText {
+                                        Text(n).monospacedDigit().foregroundStyle(.secondary)
+                                    }
+                                    Text(e.service.displayName)
+                                        .foregroundStyle(model.isHidden(e) ? .secondary : .primary)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    if isCurrent(e) {
+                                        Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
+                                    }
+                                    Toggle("非表示", isOn: Binding(get: { model.isHidden(e) },
+                                                                 set: { model.setHidden(e, $0) }))
+                                        .toggleStyle(.checkbox)
+                                        .font(.caption)
+                                }
+                                .contentShape(Rectangle())
+                                .onTapGesture { model.tune(e.tuningChannel, service: e.service.serviceID) }
+                            }
                         }
-                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -119,29 +195,8 @@ private struct ChannelPanel: View {
         .listStyle(.sidebar)
     }
 
-    private var physicalList: some View {
-        let found = Set(model.scannedChannels.map(\.id))
-        return List {
-            ForEach(model.spaces) { space in
-                Section(space.name) {
-                    ForEach(space.channels) { ch in
-                        Button { model.tune(ch) } label: {
-                            HStack {
-                                Text(ch.name)
-                                    .foregroundStyle(found.isEmpty || found.contains(ch.id) ? .primary : .secondary)
-                                Spacer()
-                                if ch == model.currentChannel {
-                                    Image(systemName: "play.fill").foregroundStyle(Color.accentColor)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-        }
-        .listStyle(.sidebar)
+    private func isCurrent(_ e: AppModel.ScannedEntry) -> Bool {
+        e.tuningChannel == model.currentChannel && e.service.serviceID == model.selection?.serviceID
     }
 }
 

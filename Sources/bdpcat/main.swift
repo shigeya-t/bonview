@@ -109,7 +109,10 @@ if scan {
         print(String(format: "%@ (%d/%d)  TSID 0x%04X  ONID %@", c.channelName, c.space, c.channel, c.transportStreamID,
                      c.originalNetworkID.map { String(format: "0x%04X", $0) } ?? "-"))
         for s in c.services {
-            print(String(format: "    SID %5d  type 0x%02X%@  %@", s.serviceID, s.serviceType, s.isOneSeg ? " 1seg" : "", s.displayName))
+            let num = c.threeDigitNumber(for: s).map { String(format: "%03d", $0) } ?? "---"
+            let dup = c.duplicateNameServiceIDs.contains(s.serviceID) ? "  (sub-channel)" : ""
+            print(String(format: "    %@  SID %5d  type 0x%02X%@  %@%@", num, s.serviceID, s.serviceType,
+                         s.isOneSeg ? " 1seg" : "", s.displayName, dup))
         }
     }
     print("\(found.count) channel(s) found")

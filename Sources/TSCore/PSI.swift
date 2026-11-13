@@ -303,6 +303,71 @@ public struct EIT {
     }
 }
 
+// MARK: - NIT
+
+/// Network Information Table (actual network, table 0x40).
+public struct NIT: Equatable {
+    public struct TransportStream: Equatable {
+        public var transportStreamID: UInt16
+        public var originalNetworkID: UInt16
+        /// ISDB-T: remote-control "one-touch" key (1–12) from the TS information descriptor (0xCD).
+        public var remoteControlKeyID: UInt8?
+        /// TS name from the TS information descriptor (e.g. "フジテレビ").
+        public var name: String?
+        /// service_list_descriptor (0x41): service IDs and types in broadcast order.
+        public var services: [(id: UInt16, type: UInt8)]
+
+        public static func == (a: Self, b: Self) -> Bool {
+            a.transportStreamID == b.transportStreamID && a.originalNetworkID == b.originalNetworkID
+                && a.remoteControlKeyID == b.remoteControlKeyID && a.name == b.name
+                && a.services.map(\.id) == b.services.map(\.id) && a.services.map(\.type) == b.services.map(\.type)
+        }
+    }
+
+    public var networkID: UInt16
+    public var networkName: String?
+    public var transportStreams: [TransportStream]
+
+    public init?(_ s: [UInt8]) {
+        guard s[0] == 0x40, let h = SectionHeader(s), s.count >= 16 else { return nil }
+        networkID = h.tableIDExtension
+        networkName = nil
+        transportStreams = []
+        let end = s.count - 4
+        let ndl = s.u12(8)
+        guard 10 + ndl + 2 <= end else { return nil }
+        for d in Descriptor.parse(s, from: 10, length: ndl) where d.tag == 0x40 {
+            networkName = ARIBString.decode(d.data)
+        }
+        var i = 10 + ndl + 2
+        let loopEnd = min(i + s.u12(10 + ndl), end)
+        while i + 6 <= loopEnd {
+            let len = s.u12(i + 4)
+            var ts = TransportStream(transportStreamID: s.u16(i), originalNetworkID: s.u16(i + 2),
+                                     remoteControlKeyID: nil, name: nil, services: [])
+            for d in Descriptor.parse(s, from: i + 6, length: len) {
+                let b = Array(d.data)
+                switch d.tag {
+                case 0xCD where b.count >= 2:
+                    ts.remoteControlKeyID = b[0]
+                    let nameLen = Int(b[1] >> 2)
+                    if 2 + nameLen <= b.count { ts.name = ARIBString.decode(b[2..<(2 + nameLen)]) }
+                case 0x41:
+                    var k = 0
+                    while k + 3 <= b.count {
+                        ts.services.append((UInt16(b[k]) << 8 | UInt16(b[k + 1]), b[k + 2]))
+                        k += 3
+                    }
+                default:
+                    break
+                }
+            }
+            transportStreams.append(ts)
+            i += 6 + len
+        }
+    }
+}
+
 // MARK: - TOT / TDT
 
 public enum TOT {

@@ -56,6 +56,10 @@ public final class TSDemuxer {
     public private(set) var selection: StreamSelection?
     public private(set) var transportStreamID: UInt16?
     public private(set) var originalNetworkID: UInt16?
+    /// From the NIT entry for the current TS (ISDB-T remote-control key, 1–12).
+    public private(set) var remoteControlKeyID: UInt8?
+    /// Whether the NIT entry for the current TS has been received.
+    public private(set) var hasNIT = false
     public private(set) var presentEvent: EventInfo?
     public private(set) var followingEvent: EventInfo?
 
@@ -67,7 +71,9 @@ public final class TSDemuxer {
     private var pmtPIDs: [UInt16: UInt16] = [:] // PID → program number
     private var pmts: [UInt16: PMT] = [:]       // program number → PMT
     private var sdtServices: [UInt16: SDT.Service] = [:]
+    private var nit: NIT?
 
+    private static let nitPID: UInt16 = 0x0010
     private static let sdtPID: UInt16 = 0x0011
     private static let eitPIDs: Set<UInt16> = [0x0012, 0x0026, 0x0027]
     private static let totPID: UInt16 = 0x0014
@@ -87,6 +93,9 @@ public final class TSDemuxer {
         services = []
         transportStreamID = nil
         originalNetworkID = nil
+        remoteControlKeyID = nil
+        hasNIT = false
+        nit = nil
         presentEvent = nil
         followingEvent = nil
         stats = DemuxStats()
@@ -137,7 +146,7 @@ public final class TSDemuxer {
             return
         }
 
-        if pid == 0x0000 || pid == Self.sdtPID || pid == Self.totPID || Self.eitPIDs.contains(pid) || pmtPIDs[pid] != nil {
+        if pid == 0x0000 || pid == Self.nitPID || pid == Self.sdtPID || pid == Self.totPID || Self.eitPIDs.contains(pid) || pmtPIDs[pid] != nil {
             var asm = sections[pid] ?? SectionAssembler()
             asm.push(payload, unitStart: p.payloadUnitStart) { section(pid, $0) }
             sections[pid] = asm
@@ -168,6 +177,7 @@ public final class TSDemuxer {
             }
             pat = newPAT
             transportStreamID = newPAT.transportStreamID
+            applyNIT()
             let valid = Set(newPAT.programs.map(\.programNumber))
             pmts = pmts.filter { valid.contains($0.key) }
             pmtPIDs = Dictionary(newPAT.programs.map { ($0.pmtPID, $0.programNumber) }, uniquingKeysWith: { a, _ in a })
@@ -177,6 +187,10 @@ public final class TSDemuxer {
             if pmts[program] == pmt { return }
             pmts[program] = pmt
             rebuildServices()
+        case 0x40 where pid == Self.nitPID:
+            guard let n = NIT(s) else { return }
+            nit = n
+            applyNIT()
         case 0x42 where pid == Self.sdtPID:
             guard let sdt = SDT(s), transportStreamID == nil || sdt.transportStreamID == transportStreamID else { return }
             originalNetworkID = sdt.originalNetworkID
@@ -200,6 +214,14 @@ public final class TSDemuxer {
         default:
             break
         }
+    }
+
+    /// Pick this TS's entry from the NIT (multi-section NITs: keep the matching section).
+    private func applyNIT() {
+        guard let tsid = transportStreamID,
+              let entry = nit?.transportStreams.first(where: { $0.transportStreamID == tsid }) else { return }
+        remoteControlKeyID = entry.remoteControlKeyID
+        hasNIT = true
     }
 
     private func rebuildServices() {
