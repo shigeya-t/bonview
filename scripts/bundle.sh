@@ -1,11 +1,26 @@
 #!/bin/zsh
-# Build BonView.app into ./build (ad-hoc signed, for local use).
+# Build BonView.app into ./build (ad-hoc signed by default, for local use).
 #   scripts/bundle.sh                              → build/BonView.app (release)
 #   CONFIG=debug scripts/bundle.sh
 #   BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh
 #   APP=/path/to/BonView.app scripts/bundle.sh        (another output location)
+#   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" scripts/bundle.sh
+#       sign for distribution: hardened runtime + secure timestamp (package_release.sh notarizes it)
+#   HARDENED_RUNTIME=1 scripts/bundle.sh           ad-hoc, but with the hardened runtime flag
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+SIGN_IDENTITY=${SIGN_IDENTITY:--}
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  SIGN_ARGS=(--force --sign -)
+  # For package_release.sh's cloud signing: Xcode's export re-signs but keeps these flags.
+  [[ "${HARDENED_RUNTIME:-}" == 1 ]] && SIGN_ARGS+=(--options runtime)
+else
+  # No entitlements: the app is not sandboxed, makes outgoing connections only and needs no JIT.
+  # Library validation passes because the bundled dylibs are signed with the same identity.
+  SIGN_ARGS=(--force --sign "$SIGN_IDENTITY" --options runtime --timestamp)
+fi
+sign() { codesign "${SIGN_ARGS[@]}" "$1" >/dev/null 2>&1 || { codesign "${SIGN_ARGS[@]}" "$1"; exit 1; }; }
 
 CONFIG=${CONFIG:-release}
 # Build the bundled FFmpeg first unless another one was chosen with FFMPEG_PREFIX.
@@ -37,7 +52,7 @@ if (( ${#libs} )); then
   mkdir -p "$APP/Contents/Frameworks" "$LIC/FFmpeg"
   for lib in $libs; do
     cp "$FFMPEG_PREFIX/lib/$lib" "$APP/Contents/Frameworks/$lib"
-    codesign --force --sign - "$APP/Contents/Frameworks/$lib" >/dev/null 2>&1
+    sign "$APP/Contents/Frameworks/$lib"
   done
   cp "$FFMPEG_PREFIX"/share/licenses/* "$LIC/FFmpeg/" 2>/dev/null || true
   FFV=$(cat "$FFMPEG_PREFIX/.version" 2>/dev/null || echo "")
@@ -59,5 +74,7 @@ FFMPEG_CREDITS="$FFMPEG_CREDITS" python3 -c 'import os, sys; sys.stdout.write(op
 if [[ -n "${BUNDLE_ID:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Contents/Info.plist"
 fi
-codesign --force --sign - "$APP" >/dev/null
+# Nested code (Contents/Frameworks) is already signed; sign the bundle last.
+sign "$APP"
+codesign --verify --strict "$APP"
 echo "$APP"
