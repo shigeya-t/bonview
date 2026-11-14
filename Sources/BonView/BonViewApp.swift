@@ -6,7 +6,13 @@ import UniformTypeIdentifiers
 @main
 struct BonViewApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var model = AppModel()
+    @State private var model: AppModel
+
+    init() {
+        // FFmpeg is weak-linked: without it, explain how to install it and quit before anything decodes.
+        FFmpegMissingAlert.checkOrExit()
+        _model = State(initialValue: AppModel())
+    }
 
     var body: some Scene {
         Window("BonView", id: "main") {

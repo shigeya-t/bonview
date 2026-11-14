@@ -15,13 +15,14 @@ let package = Package(
     ],
     targets: [
         // Thin C layer over libavcodec/libavfilter/libswresample so Swift never touches FFmpeg structs.
+        // The FFmpeg dylibs are weak-linked so the app still launches without them and can tell the
+        // user to install FFmpeg (`tv_ffmpeg_missing_libraries`) instead of dyld aborting.
         .target(
             name: "CFFmpeg",
             cSettings: [.unsafeFlags(["-I\(ffmpegPrefix)/include"])],
             linkerSettings: [
-                .unsafeFlags(["-L\(ffmpegPrefix)/lib", "-Xlinker", "-rpath", "-Xlinker", "\(ffmpegPrefix)/lib"]),
-                .linkedLibrary("avcodec"), .linkedLibrary("avutil"), .linkedLibrary("avfilter"),
-                .linkedLibrary("swresample"), .linkedLibrary("swscale"),
+                .unsafeFlags(["-L\(ffmpegPrefix)/lib", "-Xlinker", "-rpath", "-Xlinker", "\(ffmpegPrefix)/lib"]
+                    + ["avcodec", "avutil", "avfilter", "swresample", "swscale"].flatMap { ["-Xlinker", "-weak-l\($0)"] }),
                 .linkedFramework("CoreVideo"), .linkedFramework("CoreFoundation"),
             ]
         ),

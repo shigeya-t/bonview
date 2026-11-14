@@ -14,6 +14,32 @@
 
 static const AVRational kTB90k = {1, 90000};
 
+// Redeclared weak so the NULL checks below are meaningful (the dylibs are weak-linked; a missing
+// library leaves its symbols NULL instead of aborting at launch).
+extern unsigned avcodec_version(void) __attribute__((weak_import));
+extern unsigned avutil_version(void) __attribute__((weak_import));
+extern unsigned avfilter_version(void) __attribute__((weak_import));
+extern unsigned swresample_version(void) __attribute__((weak_import));
+extern unsigned swscale_version(void) __attribute__((weak_import));
+
+const char *tv_ffmpeg_missing_libraries(void) {
+    static char buf[128];
+    buf[0] = 0;
+    struct { const void *sym; const char *name; } libs[] = {
+        {(const void *)avcodec_version, "libavcodec"},
+        {(const void *)avutil_version, "libavutil"},
+        {(const void *)avfilter_version, "libavfilter"},
+        {(const void *)swresample_version, "libswresample"},
+        {(const void *)swscale_version, "libswscale"},
+    };
+    for (size_t i = 0; i < sizeof(libs) / sizeof(libs[0]); i++) {
+        if (libs[i].sym) continue;
+        if (buf[0]) strlcat(buf, ", ", sizeof(buf));
+        strlcat(buf, libs[i].name, sizeof(buf));
+    }
+    return buf[0] ? buf : NULL;
+}
+
 struct TVDecoder {
     int streamType;
     int isVideo;

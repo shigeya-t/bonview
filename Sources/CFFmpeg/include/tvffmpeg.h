@@ -30,6 +30,11 @@ typedef void (*tv_audio_callback)(void *ctx, const float *samples, int frames, i
 
 typedef struct TVDecoder TVDecoder;
 
+/// The FFmpeg libraries are weak-linked. Returns a comma-separated list of the ones that could not
+/// be loaded (e.g. "libavcodec, libavutil"), or NULL when everything is present. Nothing else in this
+/// header may be called unless this returns NULL.
+const char *tv_ffmpeg_missing_libraries(void);
+
 /// Create a decoder for the given TS stream_type. Returns NULL if unsupported.
 /// `useHardware`: try VideoToolbox for H.264/HEVC. `deinterlace`: bwdif (field-rate) for interlaced video.
 TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace);
