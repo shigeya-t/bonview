@@ -1,8 +1,9 @@
 // swift-tools-version:6.0
 import PackageDescription
 
-// FFmpeg is taken from Homebrew (`brew install ffmpeg`). Override with FFMPEG_PREFIX if needed.
-let ffmpegPrefix = Context.environment["FFMPEG_PREFIX"] ?? "/opt/homebrew/opt/ffmpeg"
+// FFmpeg: the minimal LGPL build from `scripts/build_ffmpeg.sh` (build/ffmpeg), bundled into the
+// app by bundle.sh. Override with FFMPEG_PREFIX (e.g. `$(brew --prefix ffmpeg)`) to use another build.
+let ffmpegPrefix = Context.environment["FFMPEG_PREFIX"] ?? "\(Context.packageDirectory)/build/ffmpeg"
 
 let package = Package(
     name: "BonView",
@@ -21,7 +22,10 @@ let package = Package(
             name: "CFFmpeg",
             cSettings: [.unsafeFlags(["-I\(ffmpegPrefix)/include"])],
             linkerSettings: [
-                .unsafeFlags(["-L\(ffmpegPrefix)/lib", "-Xlinker", "-rpath", "-Xlinker", "\(ffmpegPrefix)/lib"]
+                // rpath: Contents/Frameworks inside BonView.app, the prefix for `swift run` / `swift test`.
+                .unsafeFlags(["-L\(ffmpegPrefix)/lib",
+                              "-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks",
+                              "-Xlinker", "-rpath", "-Xlinker", "\(ffmpegPrefix)/lib"]
                     + ["avcodec", "avutil", "avfilter", "swresample", "swscale"].flatMap { ["-Xlinker", "-weak-l\($0)"] }),
                 .linkedFramework("CoreVideo"), .linkedFramework("CoreFoundation"),
             ]

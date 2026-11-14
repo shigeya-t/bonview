@@ -82,16 +82,15 @@ Mac 側にドライバーやカードリーダーは要りません。
 |---|---|
 | OS | macOS 14 Sonoma 以降（Apple シリコン / Intel） |
 | ビルド | Xcode 16 以降（Swift 6 ツールチェーン） |
-| ライブラリ | [FFmpeg](https://ffmpeg.org/)（Homebrew 版で動作確認） |
+| ライブラリ | [FFmpeg](https://ffmpeg.org/) 9.0.2（ビルド時に自動でダウンロード・ビルドして `.app` に同梱。インストール不要） |
 | サーバー | BonDriverProxyEx / BonDriverProxy / BonDriverProxy_Linux / BonDriverTunnel のいずれか |
 
 > [!NOTE]
-> Homebrew の FFmpeg は、インストールした macOS 向けにビルドされています。ビルドした `.app` は、基本的にビルドした Mac（と同じ以降のバージョンの macOS）でしか動きません。
+> 同梱する FFmpeg は macOS 14 以降向けに、ビルドする Mac のアーキテクチャ（Apple シリコンまたは Intel）でビルドします。
 
 ## ビルドとインストール
 
 ```bash
-brew install ffmpeg
 git clone https://github.com/shigeya-t/bonview.git
 cd bonview
 scripts/bundle.sh            # build/BonView.app を作成（アドホック署名）
@@ -99,15 +98,17 @@ open build/BonView.app
 ```
 
 - `/Applications` に置きたい場合は `build/BonView.app` をコピーしてください。
-- FFmpeg が別の場所にある場合は、`FFMPEG_PREFIX=/path/to/ffmpeg scripts/bundle.sh` のように指定します。
+- `scripts/bundle.sh` は、まず `scripts/build_ffmpeg.sh` で FFmpeg のソースを [ffmpeg.org](https://ffmpeg.org/releases/) からダウンロード（SHA-256 を照合）し、BonView に必要なデコーダー（MPEG-2 / H.264 / HEVC / AAC）とフィルターだけを有効にして `build/ffmpeg` にビルドします（初回のみ、1 分ほど）。できた dylib は `BonView.app/Contents/Frameworks` にコピーします。
+- 別の FFmpeg を使う場合は、`FFMPEG_PREFIX=$(brew --prefix ffmpeg) scripts/bundle.sh` のように指定します。この場合 FFmpeg は同梱せず、その場所から読み込みます。
 - バンドル ID は `BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh` で変えられます。
 - アイコンは `swift scripts/make_icon.swift` で作り直せます。
 
 開発中は次のコマンドも使えます。
 
 ```bash
+scripts/build_ffmpeg.sh      # 同梱用 FFmpeg を build/ffmpeg にビルド（swift build の前に一度）
 swift build                  # すべてのターゲットをビルド
-swift test                   # ユニットテスト（ffmpeg CLI があればデコードテストも実行）
+swift test                   # ユニットテスト（ffmpeg CLI があればデコードテストも実行。FFMPEG_CLI で場所を指定可）
 swift run BonView            # .app を作らずに起動
 ```
 
@@ -336,7 +337,6 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 - 字幕の縦書き・点滅・スクロール、データ放送
 - 録画、番組表からの予約
 - リモコンやチャンネル番号キーでの選局
-- FFmpeg を同梱した配布用ビルド（現在は Homebrew の dylib にリンクしています）
 
 ## 注意事項
 
@@ -350,4 +350,5 @@ BonView のソースコードは [MIT License](LICENSE) で公開しています
 
 - BonDriverProxy のプロトコル実装は [BonDriverProxy_Linux](https://github.com/u-n-k-n-o-w-n/BonDriverProxy_Linux)（MIT License）を、BonDriverTunnel のプロトコル実装は [BonDriverTunnel](https://github.com/xtne6f/BonDriverTunnel)（MIT License）を参考に、Swift で書き直したものです。
 - ARIB 外字（追加記号・追加漢字）の Unicode 対応表は [libaribcaption](https://github.com/xqq/libaribcaption)（ISC 形式のライセンス）のものを使っています（`Sources/TSCore/ARIBGaiji.swift` に著作権表示を記載）。
-- FFmpeg は LGPL / GPL のソフトウェアです。Homebrew の FFmpeg は GPL 構成でビルドされているため、それにリンクしたバイナリを配布する場合は GPL の条件に従う必要があります。
+- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ライセンス文は `Contents/Resources/FFmpeg/` に、ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。ソースは [ffmpeg.org](https://ffmpeg.org/releases/) から入手できます。
+- `FFMPEG_PREFIX` で Homebrew の FFmpeg（GPL 構成）を使ってビルドしたバイナリを配布する場合は、GPL の条件に従う必要があります。
