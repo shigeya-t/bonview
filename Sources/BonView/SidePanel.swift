@@ -203,20 +203,55 @@ private struct ChannelPanel: View {
     }
 
     /// Current programme title after the service name: smaller and grey so it reads apart from the
-    /// (semibold) name. Truncated; full title in the tooltip.
+    /// (semibold) name. Truncated; hovering shows the full title in a popover.
     @ViewBuilder private func programTitle(_ e: AppModel.ScannedEntry) -> some View {
         if let ev = model.currentProgram(e), !ev.title.isEmpty {
-            Text(ev.title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .help(ev.start == nil ? ev.title : "\(EventFormat.timeRange(ev))  \(ev.title)")
+            ProgramTitleLabel(event: ev)
         }
     }
 
     private func isCurrent(_ e: AppModel.ScannedEntry) -> Bool {
         e.tuningChannel == model.currentChannel && e.service.serviceID == model.selection?.serviceID
+    }
+}
+
+/// Truncated programme title that pops up the full title (with time and description) after the
+/// pointer rests on it. `.help` tooltips don't show reliably inside the selectable channel List.
+private struct ProgramTitleLabel: View {
+    let event: EventInfo
+    @State private var hovering = false
+    @State private var showPopover = false
+
+    var body: some View {
+        Text(event.title)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .onHover { inside in
+                hovering = inside
+                if inside {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        if hovering { showPopover = true }
+                    }
+                } else {
+                    showPopover = false
+                }
+            }
+            .popover(isPresented: $showPopover, arrowEdge: .leading) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if event.start != nil {
+                        Text(EventFormat.timeRange(event)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    Text(event.title).font(.headline)
+                    if !event.text.isEmpty {
+                        Text(event.text).font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 300, alignment: .leading)
+                .padding(10)
+            }
     }
 }
 
