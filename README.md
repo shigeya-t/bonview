@@ -101,6 +101,7 @@ open build/BonView.app
 - `scripts/bundle.sh` は、まず `scripts/build_ffmpeg.sh` で FFmpeg のソースを [ffmpeg.org](https://ffmpeg.org/releases/) からダウンロード（SHA-256 を照合）し、BonView に必要なデコーダー（MPEG-2 / H.264 / HEVC / AAC）とフィルターだけを有効にして `build/ffmpeg` にビルドします（初回のみ、1 分ほど）。できた dylib は `BonView.app/Contents/Frameworks` にコピーします。
 - 別の FFmpeg を使う場合は、`FFMPEG_PREFIX=$(brew --prefix ffmpeg) scripts/bundle.sh` のように指定します。この場合 FFmpeg は同梱せず、その場所から読み込みます。
 - バンドル ID は `BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh` で変えられます。
+- 配布用には `scripts/package_release.sh` を使います。`build/release/` に、アプリの zip、同梱した FFmpeg のソース（`ffmpeg-<版>.tar.xz`）、その説明（`FFmpeg-SOURCE.txt`）、`SHA256SUMS.txt` を作ります。LGPL の条件を満たすため、GitHub のリリースにはこれらをすべて添付してください（アップロードはしません。最後に `gh release create` のコマンドを表示します）。
 - アイコンは `swift scripts/make_icon.swift` で作り直せます。
 
 開発中は次のコマンドも使えます。
@@ -350,5 +351,6 @@ BonView のソースコードは [MIT License](LICENSE) で公開しています
 
 - BonDriverProxy のプロトコル実装は [BonDriverProxy_Linux](https://github.com/u-n-k-n-o-w-n/BonDriverProxy_Linux)（MIT License）を、BonDriverTunnel のプロトコル実装は [BonDriverTunnel](https://github.com/xtne6f/BonDriverTunnel)（MIT License）を参考に、Swift で書き直したものです。
 - ARIB 外字（追加記号・追加漢字）の Unicode 対応表は [libaribcaption](https://github.com/xqq/libaribcaption)（ISC 形式のライセンス）のものを使っています（`Sources/TSCore/ARIBGaiji.swift` に著作権表示を記載）。
-- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ライセンス文は `Contents/Resources/FFmpeg/` に、ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。ソースは [ffmpeg.org](https://ffmpeg.org/releases/) から入手できます。
+- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。改変していないソースは、各リリースに添付しているほか、[ffmpeg.org](https://ffmpeg.org/releases/) からも入手できます。
+- アプリの「BonView について」に、BonView・FFmpeg・libaribcaption のクレジットを表示します（`Resources/Credits.html`）。ライセンス文は `BonView.app/Contents/Resources/Licenses/` に入っています。
 - `FFMPEG_PREFIX` で Homebrew の FFmpeg（GPL 構成）を使ってビルドしたバイナリを配布する場合は、GPL の条件に従う必要があります。
