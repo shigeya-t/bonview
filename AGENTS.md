@@ -26,6 +26,7 @@ swift build                    # all targets (FFmpeg from build/ffmpeg; override
 swift test                     # unit + integration tests; decode/scan tests need the ffmpeg CLI (FFMPEG_CLI=…)
 scripts/bundle.sh              # build/BonView.app (release, ad-hoc signed, FFmpeg in Contents/Frameworks)
 scripts/package_release.sh     # build/release/: app zip + FFmpeg source tarball + notes (attach all to the release)
+                               # signs with the keychain's Developer ID + notarizes (NOTARY_PROFILE=…); else ad-hoc
 swift scripts/make_icon.swift  # regenerate Resources/AppIcon.{icns,png}
 scripts/mock_bdp_server.py --port 1192 --tunnel-port 1193 --origin PT-T a.ts b.ts   # fake server
 swift run bdpcat -a 127.0.0.1 -d X --list | --scan | --space 0 --channel 0 -t 5 --info
@@ -46,7 +47,7 @@ When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh
 | `Sources/BonView` | SwiftUI app. `ProgramGuide.swift` (background EPG grab on a second connection with `channelLock = 0`, passive `EPGCollector` on the viewing stream, tuner-sharing guard, JSON persistence) and `ProgramGuideView` (番組表 window, broadcast day 04:00–28:00 JST). `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
 | `Sources/bdpcat` | CLI client. |
 | `Tests/*` | Swift Testing. `MockProxyServer`/`MockTunnelServer` speak the real protocols in-process; `DecodeTests`/`ChannelScanTests` generate TS with the ffmpeg CLI and skip when it is missing. |
-| `scripts/` | `bundle.sh` (copies the `@rpath` FFmpeg dylibs into Contents/Frameworks, drops the build-tree rpath, writes `Contents/Resources/Credits.html` (About panel) from `Resources/Credits.html` and copies `LICENSE` + `Resources/Licenses/` into `Contents/Resources/Licenses`), `build_ffmpeg.sh`, `package_release.sh` (LGPL: the FFmpeg source ships with every binary release), `make_icon.swift`, `mock_bdp_server.py`, `make_demo_ts.py` (test-pattern TS with ARIB SDT/EIT/TOT, used for README screenshots). |
+| `scripts/` | `bundle.sh` (ad-hoc signs unless `SIGN_IDENTITY` is set, then hardened runtime + timestamp, no entitlements; copies the `@rpath` FFmpeg dylibs into Contents/Frameworks, drops the build-tree rpath, writes `Contents/Resources/Credits.html` (About panel) from `Resources/Credits.html` and copies `LICENSE` + `Resources/Licenses/` into `Contents/Resources/Licenses`), `build_ffmpeg.sh`, `package_release.sh` (LGPL: the FFmpeg source ships with every binary release), `make_icon.swift`, `mock_bdp_server.py`, `make_demo_ts.py` (test-pattern TS with ARIB SDT/EIT/TOT, used for README screenshots). |
 | `docs/images/` | README screenshots. Only use generated demo streams — never real broadcast footage. |
 
 ## Things that have bitten us
