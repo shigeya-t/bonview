@@ -36,6 +36,7 @@ Mac 側にドライバーやカードリーダーは要りません。
 
 - [特徴](#特徴)
 - [動作環境](#動作環境)
+- [ダウンロード](#ダウンロード)
 - [ビルドとインストール](#ビルドとインストール)
 - [サーバー側の準備](#サーバー側の準備)
 - [BonView の設定](#bonview-の設定)
@@ -80,13 +81,21 @@ Mac 側にドライバーやカードリーダーは要りません。
 
 | | |
 |---|---|
-| OS | macOS 14 Sonoma 以降（Apple シリコン / Intel） |
-| ビルド | Xcode 16 以降（Swift 6 ツールチェーン） |
+| OS | macOS 14 Sonoma 以降。配布しているアプリは Apple シリコン専用です（Intel Mac はソースからビルドしてください） |
+| ビルド | Xcode 16 以降（Swift 6 ツールチェーン）。ソースからビルドする場合のみ |
 | ライブラリ | [FFmpeg](https://ffmpeg.org/) 9.0.2（ビルド時に自動でダウンロード・ビルドして `.app` に同梱。インストール不要） |
 | サーバー | BonDriverProxyEx / BonDriverProxy / BonDriverProxy_Linux / BonDriverTunnel のいずれか |
 
 > [!NOTE]
 > 同梱する FFmpeg は macOS 14 以降向けに、ビルドする Mac のアーキテクチャ（Apple シリコンまたは Intel）でビルドします。
+
+## ダウンロード
+
+[Releases](https://github.com/shigeya-t/bonview/releases) から `BonView-<版>-macOS-arm64.zip` をダウンロードし、展開した `BonView.app` を「アプリケーション」フォルダに移して開いてください。
+
+- Apple シリコンの Mac 用です。Developer ID で署名し、Apple の公証（notarization）を受けているので、そのまま開けます。
+- FFmpeg は同梱しているので、別にインストールする必要はありません。
+- Intel Mac の場合は、次の「ビルドとインストール」の手順でビルドしてください。
 
 ## ビルドとインストール
 
