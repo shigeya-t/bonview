@@ -121,18 +121,26 @@ extension EPGStore: Codable {
         var events: [EventInfo]
     }
 
+    private enum CodingKeys: String, CodingKey { case decoderRevision, services }
+
+    /// Thrown when the data was decoded by an older `ARIBString.decoderRevision` (or is in the
+    /// original bare-array format): its text can't be re-decoded, so it should be fetched again.
+    public struct StaleData: Error {}
+
     public init(from decoder: Decoder) throws {
-        let list = try decoder.singleValueContainer().decode([Service].self)
-        for s in list {
+        guard let c = try? decoder.container(keyedBy: CodingKeys.self),
+              try c.decode(Int.self, forKey: .decoderRevision) == ARIBString.decoderRevision else { throw StaleData() }
+        for s in try c.decode([Service].self, forKey: .services) {
             services[s.key] = Dictionary(s.events.map { ($0.eventID, $0) }, uniquingKeysWith: { _, b in b })
         }
     }
 
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.singleValueContainer()
+        var c = encoder.container(keyedBy: CodingKeys.self)
         let list = services.map { Service(key: $0.key, events: $0.value.values.sorted { $0.eventID < $1.eventID }) }
             .sorted { ($0.key.originalNetworkID, $0.key.transportStreamID, $0.key.serviceID) < ($1.key.originalNetworkID, $1.key.transportStreamID, $1.key.serviceID) }
-        try c.encode(list)
+        try c.encode(ARIBString.decoderRevision, forKey: .decoderRevision)
+        try c.encode(list, forKey: .services)
     }
 }
 

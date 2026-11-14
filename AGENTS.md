@@ -67,7 +67,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
   `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
   (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `epgLastGrab.<uuid>`.
-  Programme guide data is not in UserDefaults: `~/Library/Application Support/BonView/EPG/<uuid>.json` (`EPGStore` Codable). `ProxyConfig`/`ServerProfile` decode old data with
+  Programme guide data is not in UserDefaults: `~/Library/Application Support/BonView/EPG/<uuid>.json` (`EPGStore` Codable, tagged with `ARIBString.decoderRevision`; bump it when decoded text changes so stale files are dropped and re-grabbed). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;
   update those comments together with the code.
