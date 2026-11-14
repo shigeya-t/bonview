@@ -179,7 +179,23 @@ extension AppModel {
         let url = Preferences.epgURL(for: profile.id)
         let gen = generation
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let data = try? Data(contentsOf: url), var store = try? JSONDecoder().decode(EPGStore.self, from: data) else { return }
+            guard let data = try? Data(contentsOf: url) else { return }
+            let decoded: EPGStore
+            do {
+                decoded = try JSONDecoder().decode(EPGStore.self, from: data)
+            } catch is EPGStore.StaleData {
+                // Saved by an older text decoder (e.g. before gaiji support): drop it and re-grab.
+                try? FileManager.default.removeItem(at: url)
+                Preferences.setEPGLastGrab(nil, for: profile.id)
+                DispatchQueue.main.async {
+                    guard let self, self.generation == gen else { return }
+                    self.epgLastGrab = nil
+                }
+                return
+            } catch {
+                return
+            }
+            var store = decoded
             store.prune(before: Date().addingTimeInterval(-3 * 3600))
             DispatchQueue.main.async {
                 guard let self, self.generation == gen else { return }

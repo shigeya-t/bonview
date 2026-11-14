@@ -135,6 +135,20 @@ enum EITBuilder {
         #expect(back.dateRange == Self.base...Self.base.addingTimeInterval(9 * 3600))
     }
 
+    @Test func staleDecoderRevisionIsRejected() throws {
+        var store = EPGStore()
+        for s in EITBuilder.schedule(sid: 9, tsid: 8, onid: 7, base: Self.base) { store.apply(try #require(EIT(s))) }
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(store)) as? [String: Any])
+        #expect(json["decoderRevision"] as? Int == ARIBString.decoderRevision)
+        json["decoderRevision"] = ARIBString.decoderRevision - 1
+        #expect(throws: EPGStore.StaleData.self) {
+            try JSONDecoder().decode(EPGStore.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        // Original format: a bare array of services, written before gaiji support.
+        let legacy = try JSONSerialization.data(withJSONObject: json["services"]!)
+        #expect(throws: EPGStore.StaleData.self) { try JSONDecoder().decode(EPGStore.self, from: legacy) }
+    }
+
     @Test func scheduleCompleteness() throws {
         var progress = EITScheduleProgress()
         let secs = EITBuilder.schedule(sid: 1, tsid: 2, onid: 3, base: Self.base)

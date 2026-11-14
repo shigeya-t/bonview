@@ -35,6 +35,10 @@ public enum ARIBString {
         }
     }
 
+    /// Bump whenever decoding output changes, so text stored by an older decoder (the saved
+    /// programme guide) is discarded and fetched again. 2: additional symbols / kanji (gaiji).
+    public static let decoderRevision = 2
+
     public static func decode<C: Collection>(_ bytes: C) -> String where C.Element == UInt8 {
         var d = Decoder()
         return d.run(Array(bytes))
