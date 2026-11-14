@@ -248,6 +248,8 @@ private struct ProgramTitleLabel: View {
                         Text(event.text).font(.callout).foregroundStyle(.secondary)
                     }
                 }
+                // The popover inherits the label's environment; undo its single-line truncation.
+                .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(width: 300, alignment: .leading)
                 .padding(10)
