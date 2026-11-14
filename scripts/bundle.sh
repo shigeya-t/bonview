@@ -6,12 +6,15 @@
 #   APP=/path/to/BonView.app scripts/bundle.sh        (another output location)
 #   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" scripts/bundle.sh
 #       sign for distribution: hardened runtime + secure timestamp (package_release.sh notarizes it)
+#   HARDENED_RUNTIME=1 scripts/bundle.sh           ad-hoc, but with the hardened runtime flag
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SIGN_IDENTITY=${SIGN_IDENTITY:--}
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
   SIGN_ARGS=(--force --sign -)
+  # For package_release.sh's cloud signing: Xcode's export re-signs but keeps these flags.
+  [[ "${HARDENED_RUNTIME:-}" == 1 ]] && SIGN_ARGS+=(--options runtime)
 else
   # No entitlements: the app is not sandboxed, makes outgoing connections only and needs no JIT.
   # Library validation passes because the bundled dylibs are signed with the same identity.

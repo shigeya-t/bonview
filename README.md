@@ -103,9 +103,17 @@ open build/BonView.app
 - バンドル ID（既定は `io.github.shigeya-t.BonView`）は `BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh` で変えられます。設定（UserDefaults）はバンドル ID ごとに別になります。
 - 配布用には `scripts/package_release.sh` を使います。`build/release/` に、アプリの zip、同梱した FFmpeg のソース（`ffmpeg-<版>.tar.xz`）、その説明（`FFmpeg-SOURCE.txt`）、`SHA256SUMS.txt` を作ります。LGPL の条件を満たすため、GitHub のリリースにはこれらをすべて添付してください（アップロードはしません。最後に `gh release create` のコマンドを表示します）。
 - 配布する `.app` は Developer ID で署名し、Apple の公証（notarization）を受けます。そうしないと、ダウンロードしたアプリを Gatekeeper がブロックします。準備は次の 2 つです。
-  1. Apple Developer のサイトで **Developer ID Application** 証明書を作り、キーチェーンに入れる。`package_release.sh` はキーチェーンにある最初の Developer ID Application 証明書を使います（`SIGN_IDENTITY` で指定することもできます）。
-  2. 公証用の認証情報を保存する。`xcrun notarytool store-credentials bonview-notary --apple-id <Apple ID> --team-id <チーム ID>`（パスワードは App 用パスワード）。そのうえで `NOTARY_PROFILE=bonview-notary scripts/package_release.sh` と実行すると、署名（Hardened Runtime）→ 公証 → staple まで行います。CI では `NOTARY_KEY` / `NOTARY_KEY_ID` / `NOTARY_ISSUER`（App Store Connect API キー）も使えます。
-  - Developer ID の証明書がないときはアドホック署名になり、警告を出します（配布には向きません）。
+  1. Developer ID の署名。次のどちらかです。
+     - **クラウド管理の証明書**（Xcode にチームのアカウントを登録してあれば、証明書のファイルは要りません。Admin の権限でも使えます）: `DEVELOPMENT_TEAM=<チーム ID>` を付けて実行します。アプリを `.xcarchive` の形にして `xcodebuild -exportArchive`（`method = developer-id`）で署名し直します。
+     - **キーチェーンの Developer ID Application 証明書**（作れるのは Account Holder だけ）: 見つかれば自動で使います（`SIGN_IDENTITY` で指定することもできます）。
+  2. 公証用の認証情報を保存する。`xcrun notarytool store-credentials bonview-notary --apple-id <Apple ID> --team-id <チーム ID>`（パスワードは App 用パスワード）。CI では `NOTARY_KEY` / `NOTARY_KEY_ID` / `NOTARY_ISSUER`（App Store Connect API キー）も使えます。
+
+  ```bash
+  NOTARY_PROFILE=bonview-notary DEVELOPMENT_TEAM=<チーム ID> scripts/package_release.sh
+  ```
+
+  で、署名（Hardened Runtime）→ 公証 → staple まで行います。
+  - どちらの署名方法も使えないときはアドホック署名になり、警告を出します（配布には向きません）。
 - アイコンは `swift scripts/make_icon.swift` で作り直せます。
 
 開発中は次のコマンドも使えます。

@@ -26,7 +26,8 @@ swift build                    # all targets (FFmpeg from build/ffmpeg; override
 swift test                     # unit + integration tests; decode/scan tests need the ffmpeg CLI (FFMPEG_CLI=…)
 scripts/bundle.sh              # build/BonView.app (release, ad-hoc signed, FFmpeg in Contents/Frameworks)
 scripts/package_release.sh     # build/release/: app zip + FFmpeg source tarball + notes (attach all to the release)
-                               # signs with the keychain's Developer ID + notarizes (NOTARY_PROFILE=…); else ad-hoc
+                               # Developer ID: keychain cert, or DEVELOPMENT_TEAM=… (Xcode cloud signing via a
+                               # synthesized .xcarchive + -exportArchive); notarizes with NOTARY_PROFILE=…; else ad-hoc
 swift scripts/make_icon.swift  # regenerate Resources/AppIcon.{icns,png}
 scripts/mock_bdp_server.py --port 1192 --tunnel-port 1193 --origin PT-T a.ts b.ts   # fake server
 swift run bdpcat -a 127.0.0.1 -d X --list | --scan | --space 0 --channel 0 -t 5 --info

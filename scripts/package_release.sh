@@ -6,10 +6,14 @@
 #   SHA256SUMS.txt
 # Attach every file in build/release/ to the GitHub release; the command is printed at the end.
 #
-# Signing and notarization (so Gatekeeper opens the downloaded app without warnings):
-#   SIGN_IDENTITY   codesign identity; default: the first "Developer ID Application" in the keychain,
-#                   else ad-hoc ("-") with a warning (Gatekeeper then blocks the downloaded app).
-#   Notary credentials, required with a Developer ID identity (NOTARIZE=0 skips notarization):
+# Signing and notarization (so Gatekeeper opens the downloaded app without warnings), first match wins:
+#   SIGN_IDENTITY=…       sign locally with this codesign identity
+#   (keychain)            the first "Developer ID Application" identity in the keychain
+#   DEVELOPMENT_TEAM=…    Xcode's cloud-managed Developer ID certificate of that team: the app is wrapped
+#                         in an .xcarchive and exported with `xcodebuild -exportArchive -allowProvisioningUpdates`
+#                         (an Xcode account with the Admin or Account Holder role; no local certificate needed)
+#   otherwise             ad-hoc, with a warning (Gatekeeper then blocks the downloaded app)
+#   Notary credentials, required with Developer ID (NOTARIZE=0 skips notarization):
 #     NOTARY_PROFILE=name                         from `xcrun notarytool store-credentials name …`
 #     NOTARY_KEY=AuthKey_X.p8 NOTARY_KEY_ID=X NOTARY_ISSUER=uuid   App Store Connect API key (CI)
 set -euo pipefail
@@ -23,8 +27,10 @@ if [[ -z "${SIGN_IDENTITY:-}" ]]; then
     | sed -n 's/^ *[0-9]*) [0-9A-F]* "\(Developer ID Application: .*\)"$/\1/p' | head -1)
   SIGN_IDENTITY=${SIGN_IDENTITY:--}
 fi
+CLOUD_TEAM=""
+[[ "$SIGN_IDENTITY" == "-" ]] && CLOUD_TEAM=${DEVELOPMENT_TEAM:-}
 NOTARY_ARGS=()
-if [[ "$SIGN_IDENTITY" == "-" ]]; then
+if [[ "$SIGN_IDENTITY" == "-" && -z "$CLOUD_TEAM" ]]; then
   echo "warning: no Developer ID identity; the app is ad-hoc signed and Gatekeeper will block it after download" >&2
 elif [[ "${NOTARIZE:-1}" == 0 ]]; then
   echo "warning: NOTARIZE=0; the app is signed but not notarized" >&2
@@ -45,7 +51,59 @@ OUT=build/release
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
-APP="$OUT/BonView.app" scripts/bundle.sh >/dev/null
+if [[ -z "$CLOUD_TEAM" ]]; then
+  APP="$OUT/BonView.app" scripts/bundle.sh >/dev/null
+else
+  # The export re-signs but keeps the code signature flags, so the archived app needs the hardened
+  # runtime already.
+  ARCHIVE="$OUT/BonView.xcarchive"
+  mkdir -p "$ARCHIVE/Products/Applications"
+  HARDENED_RUNTIME=1 APP="$ARCHIVE/Products/Applications/BonView.app" scripts/bundle.sh >/dev/null
+  plist() { /usr/libexec/PlistBuddy -c "Print :$1" Resources/Info.plist; }
+  cat > "$ARCHIVE/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>ApplicationProperties</key>
+  <dict>
+    <key>ApplicationPath</key><string>Applications/BonView.app</string>
+    <key>Architectures</key><array><string>$ARCH</string></array>
+    <key>CFBundleIdentifier</key><string>$(plist CFBundleIdentifier)</string>
+    <key>CFBundleShortVersionString</key><string>$VERSION</string>
+    <key>CFBundleVersion</key><string>$(plist CFBundleVersion)</string>
+    <key>Team</key><string>$CLOUD_TEAM</string>
+  </dict>
+  <key>ArchiveVersion</key><integer>2</integer>
+  <key>CreationDate</key><date>$(date -u +%Y-%m-%dT%H:%M:%SZ)</date>
+  <key>Name</key><string>BonView</string>
+  <key>SchemeName</key><string>BonView</string>
+</dict>
+</plist>
+PLIST
+  cat > "$OUT/ExportOptions.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key><string>developer-id</string>
+  <key>signingStyle</key><string>automatic</string>
+  <key>teamID</key><string>$CLOUD_TEAM</string>
+</dict>
+</plist>
+PLIST
+  echo "Signing with the cloud-managed Developer ID certificate of team $CLOUD_TEAM…"
+  xcodebuild -exportArchive -archivePath "$ARCHIVE" -exportPath "$OUT/export" \
+    -exportOptionsPlist "$OUT/ExportOptions.plist" -allowProvisioningUpdates > build/export.log 2>&1 \
+    || { tail -20 build/export.log >&2; echo "export failed (full log: build/export.log)" >&2; exit 1; }
+  mv "$OUT/export/BonView.app" "$OUT/BonView.app"
+  rm -rf "$ARCHIVE" "$OUT/export" "$OUT/ExportOptions.plist"
+  SIGN_IDENTITY=$(codesign -dvv "$OUT/BonView.app" 2>&1 | sed -n 's/^Authority=\(Developer ID Application: .*\)$/\1/p')
+  [[ -n "$SIGN_IDENTITY" ]] || { echo "the exported app is not signed with Developer ID" >&2; exit 1; }
+  [[ "$(codesign -dv "$OUT/BonView.app" 2>&1)" == *"flags="*"runtime"* ]] \
+    || { echo "the exported app lacks the hardened runtime" >&2; exit 1; }
+fi
+codesign --verify --deep --strict "$OUT/BonView.app"
 FFV=$(<build/ffmpeg/.version)
 [[ -d "$OUT/BonView.app/Contents/Frameworks" ]] || { echo "FFmpeg was not bundled" >&2; exit 1; }
 
