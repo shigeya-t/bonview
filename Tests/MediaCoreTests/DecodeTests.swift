@@ -7,7 +7,9 @@ import TSCore
 /// Generates broadcast-like TS with the ffmpeg CLI (skipped when ffmpeg is not installed) and
 /// runs it through demux + decode.
 @Suite(.serialized) struct DecodeTests {
-    static let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first { FileManager.default.isExecutableFile(atPath: $0) }
+    /// `FFMPEG_CLI` overrides the Homebrew locations (the CLI only generates test streams).
+    static let ffmpeg = [ProcessInfo.processInfo.environment["FFMPEG_CLI"], "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+        .compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
 
     static func makeTS(_ name: String, _ args: [String]) throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("bonview-\(name).ts")
@@ -19,6 +21,19 @@ import TSCore
         p.waitUntilExit()
         #expect(p.terminationStatus == 0)
         return url
+    }
+
+    /// FFmpeg built without GPL parts has no libx264; the VideoToolbox encoder works as well here.
+    static func hasEncoder(_ name: String) -> Bool {
+        let p = Process(), out = Pipe()
+        p.executableURL = URL(fileURLWithPath: ffmpeg!)
+        p.arguments = ["-hide_banner", "-encoders"]
+        p.standardOutput = out
+        p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return false }
+        let text = String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        p.waitUntilExit()
+        return text.contains(" \(name) ")
     }
 
     struct Result {
@@ -116,7 +131,7 @@ import TSCore
         let url = try Self.makeTS("h264", [
             "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30000/1001",
             "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "3",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+            "-c:v", Self.hasEncoder("libx264") ? "libx264" : "h264_videotoolbox", "-pix_fmt", "yuv420p", "-c:a", "aac",
         ])
         let r = try Self.decode(url, hardware: true, deinterlace: true)
         #expect(r.videoCodec == "h264 (VideoToolbox)")

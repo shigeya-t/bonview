@@ -56,7 +56,9 @@ final class FakeDriver: BonDriver, @unchecked Sendable {
 }
 
 @Suite struct ChannelScanTests {
-    static let ffmpeg = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"].first { FileManager.default.isExecutableFile(atPath: $0) }
+    /// `FFMPEG_CLI` overrides the Homebrew locations (the CLI only generates test streams).
+    static let ffmpeg = [ProcessInfo.processInfo.environment["FFMPEG_CLI"], "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+        .compactMap { $0 }.first { FileManager.default.isExecutableFile(atPath: $0) }
 
     static func makeTS(tsid: Int, sid: Int, name: String) throws -> Data {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("bonview-scan-\(tsid).ts")

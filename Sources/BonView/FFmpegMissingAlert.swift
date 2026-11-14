@@ -1,12 +1,12 @@
 import AppKit
 import MediaCore
 
-/// Shown at launch when the Homebrew FFmpeg libraries cannot be loaded. The app quits afterwards:
-/// nothing can be decoded without them (and the weak-linked symbols are NULL).
+/// Shown at launch when the FFmpeg libraries cannot be loaded: normally they are bundled in
+/// Contents/Frameworks, so this means a damaged copy or a build against another FFmpeg
+/// (FFMPEG_PREFIX) that is gone. The app quits afterwards: nothing can be decoded without them
+/// (and the weak-linked symbols are NULL).
 enum FFmpegMissingAlert {
     static let projectURL = URL(string: "https://github.com/shigeya-t/bonview")!
-    static let homebrewURL = URL(string: "https://brew.sh/ja/")!
-    static let installCommand = "brew install ffmpeg"
 
     /// Returns normally when FFmpeg is available; otherwise shows the alert and exits.
     static func checkOrExit() {
@@ -19,30 +19,23 @@ enum FFmpegMissingAlert {
 
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "FFmpeg が見つかりません"
+        alert.messageText = "FFmpeg を読み込めません"
         alert.informativeText = """
-            BonView は映像・音声のデコードに Homebrew の FFmpeg を使います。\
-            FFmpeg がインストールされていないか、BonView のビルド時とバージョンが異なります。
+            BonView は映像・音声のデコードに FFmpeg を使います。\
+            アプリに同梱の FFmpeg が見つからないか、壊れています。
             （読み込めないライブラリ: \(missing.joined(separator: ", "))）
             """
         alert.accessoryView = makeAccessoryView()
         alert.addButton(withTitle: "終了")
-        alert.addButton(withTitle: "コマンドをコピーして終了")
         alert.addButton(withTitle: "GitHub を開く")
 
-        switch alert.runModal() {
-        case .alertSecondButtonReturn:
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(installCommand, forType: .string)
-        case .alertThirdButtonReturn:
+        if alert.runModal() == .alertSecondButtonReturn {
             NSWorkspace.shared.open(projectURL)
-        default:
-            break
         }
         exit(1)
     }
 
-    /// Install steps with clickable links (Homebrew, the project page) and a selectable command.
+    /// Recovery steps with a clickable link to the project page and selectable commands.
     private static func makeAccessoryView() -> NSView {
         let body = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
         let mono = NSFont.monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -52,13 +45,12 @@ enum FFmpegMissingAlert {
             if let link { attrs[.link] = link }
             text.append(NSAttributedString(string: s, attributes: attrs))
         }
-        add("インストール方法\n", font: .boldSystemFont(ofSize: NSFont.smallSystemFontSize))
-        add("1. Homebrew をインストールします（未導入の場合）: ")
-        add(homebrewURL.absoluteString, link: homebrewURL)
-        add("\n2. ターミナルで次のコマンドを実行します:\n")
-        add("    \(installCommand)\n", font: mono)
-        add("3. BonView を起動し直します。\n\n")
-        add("FFmpeg を更新した後にこの画面が出る場合は、BonView をビルドし直してください。\n")
+        add("直し方\n", font: .boldSystemFont(ofSize: NSFont.smallSystemFontSize))
+        add("・ダウンロードした BonView の場合は、アプリを入れ直してください。\n")
+        add("・ソースからビルドした場合は、リポジトリで次を実行して作り直してください（FFmpeg も一緒にビルドして同梱します）:\n")
+        add("    scripts/bundle.sh\n", font: mono)
+        add("・FFMPEG_PREFIX で Homebrew の FFmpeg を指定してビルドした場合は、それがインストールされているか確認してください:\n")
+        add("    brew install ffmpeg\n\n", font: mono)
         add("詳しくは ")
         add(projectURL.absoluteString, link: projectURL)
         add(" を参照してください。")

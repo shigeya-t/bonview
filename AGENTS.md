@@ -13,22 +13,26 @@ Scope decisions (keep them unless the maintainer says otherwise):
 - **Client only.** No BonDriver server and no local tuner drivers on macOS.
 - **No descrambling (ARIB STD-B25) on the Mac.** The server does it. Only the HaijinW BonDriverProxyEx
   "please descramble" request bit is sent.
-- Decoding is **FFmpeg + VideoToolbox** (Homebrew FFmpeg, dynamically linked).
+- Decoding is **FFmpeg + VideoToolbox**: a minimal LGPL FFmpeg built by `scripts/build_ffmpeg.sh` and
+  bundled as dylibs in `BonView.app/Contents/Frameworks`. Don't enable GPL/nonfree parts.
 - User-facing strings are **Japanese**. Code comments and identifiers are **English**.
 - Don't use the name "TVTest" in the product, UI or identifiers.
 
 ## Commands
 
 ```bash
-swift build                    # all targets (needs `brew install ffmpeg`; override with FFMPEG_PREFIX)
-swift test                     # unit + integration tests; decode/scan tests need the ffmpeg CLI
-scripts/bundle.sh              # build/BonView.app (release, ad-hoc signed)
+scripts/build_ffmpeg.sh        # bundled LGPL FFmpeg → build/ffmpeg (once; bundle.sh runs it too)
+swift build                    # all targets (FFmpeg from build/ffmpeg; override with FFMPEG_PREFIX)
+swift test                     # unit + integration tests; decode/scan tests need the ffmpeg CLI (FFMPEG_CLI=…)
+scripts/bundle.sh              # build/BonView.app (release, ad-hoc signed, FFmpeg in Contents/Frameworks)
+scripts/package_release.sh     # build/release/: app zip + FFmpeg source tarball + notes (attach all to the release)
 swift scripts/make_icon.swift  # regenerate Resources/AppIcon.{icns,png}
 scripts/mock_bdp_server.py --port 1192 --tunnel-port 1193 --origin PT-T a.ts b.ts   # fake server
 swift run bdpcat -a 127.0.0.1 -d X --list | --scan | --space 0 --channel 0 -t 5 --info
 ```
 
-The "ld: warning … built for newer macOS" linker warnings come from Homebrew's dylibs and are expected.
+With `FFMPEG_PREFIX` pointing at Homebrew, "ld: warning … built for newer macOS" linker warnings are expected.
+When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh` and the README.
 
 ## Layout
 
@@ -42,7 +46,7 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 | `Sources/BonView` | SwiftUI app. `ProgramGuide.swift` (background EPG grab on a second connection with `channelLock = 0`, passive `EPGCollector` on the viewing stream, tuner-sharing guard, JSON persistence) and `ProgramGuideView` (番組表 window, broadcast day 04:00–28:00 JST). `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
 | `Sources/bdpcat` | CLI client. |
 | `Tests/*` | Swift Testing. `MockProxyServer`/`MockTunnelServer` speak the real protocols in-process; `DecodeTests`/`ChannelScanTests` generate TS with the ffmpeg CLI and skip when it is missing. |
-| `scripts/` | `bundle.sh`, `make_icon.swift`, `mock_bdp_server.py`, `make_demo_ts.py` (test-pattern TS with ARIB SDT/EIT/TOT, used for README screenshots). |
+| `scripts/` | `bundle.sh` (copies the `@rpath` FFmpeg dylibs into Contents/Frameworks, drops the build-tree rpath, writes `Contents/Resources/Credits.html` (About panel) from `Resources/Credits.html` and copies `LICENSE` + `Resources/Licenses/` into `Contents/Resources/Licenses`), `build_ffmpeg.sh`, `package_release.sh` (LGPL: the FFmpeg source ships with every binary release), `make_icon.swift`, `mock_bdp_server.py`, `make_demo_ts.py` (test-pattern TS with ARIB SDT/EIT/TOT, used for README screenshots). |
 | `docs/images/` | README screenshots. Only use generated demo streams — never real broadcast footage. |
 
 ## Things that have bitten us
@@ -85,3 +89,4 @@ The "ld: warning … built for newer macOS" linker warnings come from Homebrew's
 - Never commit real server addresses, MAC addresses, `.ini`/`.conf` files, recorded `.ts` files, crash
   reports or personal paths. Use documentation addresses (`192.168.0.x`, `127.0.0.1`) and placeholders.
 - `.gitignore` already excludes these; check `git status` before committing.
+- New third-party code or data in the binary → add its notice to `Resources/Licenses/` and `Resources/Credits.html`.
