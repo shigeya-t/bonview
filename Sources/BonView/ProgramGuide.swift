@@ -23,8 +23,6 @@ extension AppModel {
     /// Re-grab automatically when the last full grab is older than this.
     static let epgAutoGrabInterval: TimeInterval = 6 * 3600
 
-    var isGrabbingEPG: Bool { epgGrab?.isRunning ?? false }
-
     func epgKey(_ e: ScannedEntry) -> EPGServiceKey? {
         epg.key(originalNetworkID: e.channel.originalNetworkID, transportStreamID: e.channel.transportStreamID,
                 serviceID: e.service.serviceID)
