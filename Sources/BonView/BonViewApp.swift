@@ -115,7 +115,7 @@ struct AppCommands: Commands {
             Picker("二重音声", selection: Binding(get: { model.dualMono }, set: { model.dualMono = $0 })) {
                 ForEach([DualMonoMode.main, .sub, .both], id: \.self) { Text(model.dualMonoLabel($0)).tag($0) }
             }
-            .disabled(!model.status.isDualMono)
+            .disabled(!model.isDualMono)
         }
         CommandGroup(after: .toolbar) {
             Menu("画面サイズ") {

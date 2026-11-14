@@ -38,7 +38,15 @@ final class AppModel {
     /// Scan result of the current profile (empty = never scanned → list physical channels).
     var scannedChannels: [ScannedChannel] = []
     var showScanSheet = false
-    var scan: ScanProgress?
+    var scan: ScanProgress? {
+        didSet {
+            let running = scan.map { !$0.finished } ?? false
+            if isScanning != running { isScanning = running }
+        }
+    }
+    /// Changes only when a scan starts or ends, unlike `scan` (progress); the menu bar reads it
+    /// (see `isDualMono`).
+    private(set) var isScanning = false
 
     struct ScanProgress: Equatable {
         var index = 0
@@ -100,8 +108,6 @@ final class AppModel {
         if let p = currentProfile { Preferences.setChannelOrder(full, for: p.id) }
     }
 
-    var isScanning: Bool { scan.map { !$0.finished } ?? false }
-
     // MARK: Stream
     var services: [ServiceInfo] = []
     var selection: StreamSelection?
@@ -111,6 +117,10 @@ final class AppModel {
     var programCache = ProgramCache()
     var broadcastTime: Date?
     var status = PlayerStatus()
+    /// `status.isDualMono`, updated only when it changes. The menu bar (`AppCommands`) reads this
+    /// instead of `status`: any observed change rebuilds the main menu, and rebuilding it while a
+    /// menu is open drops the items AppKit adds to the Window menu.
+    var isDualMono = false
     var videoSize: CGSize = .zero
     /// Caption plane currently on screen.
     var captionFrame = CaptionFrame()
@@ -126,7 +136,14 @@ final class AppModel {
     /// Guide data of the current profile: EIT schedule from the background grab plus whatever
     /// the viewing stream carries.
     var epg = EPGStore()
-    var epgGrab: EPGGrabProgress?
+    var epgGrab: EPGGrabProgress? {
+        didSet {
+            let running = epgGrab?.isRunning ?? false
+            if isGrabbingEPG != running { isGrabbingEPG = running }
+        }
+    }
+    /// Changes only when a grab starts or ends, unlike `epgGrab` (progress); the menu bar reads it.
+    private(set) var isGrabbingEPG = false
     /// When the last full grab of the current profile finished.
     var epgLastGrab: Date?
     var epgAutoGrab = Preferences.bool("epgAutoGrab", default: false) {
@@ -227,7 +244,11 @@ final class AppModel {
         player.onEventChanged = { [weak self] p, f in self?.presentEvent = p; self?.followingEvent = f }
         player.onServiceEvent = { [weak self] in self?.programCache.update($0) }
         player.onTime = { [weak self] in self?.broadcastTime = $0 }
-        player.onStatus = { [weak self] in self?.status = $0 }
+        player.onStatus = { [weak self] s in
+            guard let self else { return }
+            self.status = s
+            if self.isDualMono != s.isDualMono { self.isDualMono = s.isDualMono }
+        }
         player.onCaption = { [weak self] in self?.captionFrame = $0 }
         player.onSuperimpose = { [weak self] in self?.superimposeFrame = $0 }
         player.onCaptionLanguages = { [weak self] langs in
