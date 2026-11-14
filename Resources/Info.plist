@@ -7,7 +7,7 @@
 	<key>CFBundleExecutable</key>
 	<string>BonView</string>
 	<key>CFBundleIdentifier</key>
-	<string>local.bonview.app</string>
+	<string>io.github.shigeya-t.BonView</string>
 	<key>CFBundleName</key>
 	<string>BonView</string>
 	<key>CFBundleDisplayName</key>

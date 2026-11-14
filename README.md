@@ -100,7 +100,7 @@ open build/BonView.app
 - `/Applications` に置きたい場合は `build/BonView.app` をコピーしてください。
 - `scripts/bundle.sh` は、まず `scripts/build_ffmpeg.sh` で FFmpeg のソースを [ffmpeg.org](https://ffmpeg.org/releases/) からダウンロード（SHA-256 を照合）し、BonView に必要なデコーダー（MPEG-2 / H.264 / HEVC / AAC）とフィルターだけを有効にして `build/ffmpeg` にビルドします（初回のみ、1 分ほど）。できた dylib は `BonView.app/Contents/Frameworks` にコピーします。
 - 別の FFmpeg を使う場合は、`FFMPEG_PREFIX=$(brew --prefix ffmpeg) scripts/bundle.sh` のように指定します。この場合 FFmpeg は同梱せず、その場所から読み込みます。
-- バンドル ID は `BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh` で変えられます。
+- バンドル ID（既定は `io.github.shigeya-t.BonView`）は `BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh` で変えられます。設定（UserDefaults）はバンドル ID ごとに別になります。
 - 配布用には `scripts/package_release.sh` を使います。`build/release/` に、アプリの zip、同梱した FFmpeg のソース（`ffmpeg-<版>.tar.xz`）、その説明（`FFmpeg-SOURCE.txt`）、`SHA256SUMS.txt` を作ります。LGPL の条件を満たすため、GitHub のリリースにはこれらをすべて添付してください（アップロードはしません。最後に `gh release create` のコマンドを表示します）。
 - 配布する `.app` は Developer ID で署名し、Apple の公証（notarization）を受けます。そうしないと、ダウンロードしたアプリを Gatekeeper がブロックします。準備は次の 2 つです。
   1. Apple Developer のサイトで **Developer ID Application** 証明書を作り、キーチェーンに入れる。`package_release.sh` はキーチェーンにある最初の Developer ID Application 証明書を使います（`SIGN_IDENTITY` で指定することもできます）。
