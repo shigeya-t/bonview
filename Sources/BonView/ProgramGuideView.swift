@@ -80,7 +80,7 @@ struct ProgramGuideView: View {
                     .disabled(dayOffset + 1 >= dayCount)
                 Button {
                     dayOffset = 0
-                    scrollTarget = Self.calendar.component(.hour, from: now)
+                    scrollTarget = nowScrollHour
                 } label: { Label("現在", systemImage: "clock") }
                     .help("現在の時刻へ移動")
             }
@@ -117,8 +117,8 @@ struct ProgramGuideView: View {
                 }
             }
             .onAppear {
-                // Open at the current hour.
-                DispatchQueue.main.async { proxy.scrollTo(hourID(Self.calendar.component(.hour, from: now)), anchor: .topLeading) }
+                // Open around the current hour.
+                DispatchQueue.main.async { proxy.scrollTo(hourID(nowScrollHour), anchor: .topLeading) }
             }
             .onChange(of: scrollTarget) { _, h in
                 guard let h else { return }
@@ -129,6 +129,13 @@ struct ProgramGuideView: View {
     }
 
     private func hourID(_ hour: Int) -> String { "hour-\(hour)" }
+
+    /// Top row when jumping to "now": one hour before the current hour, so the
+    /// now line sits a little below the header. Never before the 04:00 day start.
+    private var nowScrollHour: Int {
+        let hour = Self.calendar.component(.hour, from: now)
+        return hour == 4 ? 4 : (hour + 23) % 24
+    }
 
     private func timeColumn(height: CGFloat) -> some View {
         VStack(spacing: 0) {
