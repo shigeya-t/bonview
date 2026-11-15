@@ -70,7 +70,7 @@ public final class ProxyClient: BonDriver, @unchecked Sendable {
     deinit { teardown() }
 
     private func startReceiver() {
-        let maxBody = max(config.tsPacketBufSize, 65536) + 8
+        let maxBody = min(max(config.tsPacketBufSize, 65536), ProxyConfig.maxTsPacketBufSize) + 8
         let t = Thread { [weak self, socket, receiverDone] in
             defer { receiverDone.signal() }
             while true {

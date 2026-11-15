@@ -11,6 +11,11 @@ public struct PESPacket: Sendable {
 
 /// Reassembles PES packets for one PID.
 public struct PESAssembler {
+    /// Largest PES kept. Unbounded (PES_packet_length 0) video PES only end at the next unit
+    /// start; a stream that never sends one would otherwise grow the buffer forever. An HD
+    /// I-frame is well under 2 MB.
+    public static let maxSize = 8 << 20
+
     private var buffer = Data()
     private var expected: Int? // total PES size when PES_packet_length != 0
     private var active = false
@@ -37,6 +42,7 @@ public struct PESAssembler {
             }
         } else {
             guard active else { return }
+            guard buffer.count + payload.count <= Self.maxSize else { reset(); return }
             buffer.append(contentsOf: payload)
         }
         if let e = expected, buffer.count >= e {

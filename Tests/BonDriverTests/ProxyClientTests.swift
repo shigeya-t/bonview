@@ -14,6 +14,8 @@ import Testing
         #expect(Array(p.encoded().prefix(4)) == [0xFF, 15, 0x01, 0])
         #expect(try ProxyConfig.parse("ADDRESS=a\nPORT=1\nBONDRIVER=b\nB25=0").requestB25 == false)
         #expect(try ProxyConfig.parse("ADDRESS=a\nPORT=1\nBONDRIVER=b").requestB25 == true)
+        #expect(try ProxyConfig.parse("ADDRESS=a\nPORT=1\nBONDRIVER=b\nTSPACKET_BUFSIZE=\(Int.max)").tsPacketBufSize
+                == ProxyConfig.maxTsPacketBufSize)
         // Profiles saved before this option existed still decode.
         let old = #"{"address":"x","port":1192,"bonDriver":"PT-T","channelLock":0,"connectTimeout":5,"useMagicPacket":false,"tsPacketBufSize":192512}"#
         let cfg = try JSONDecoder().decode(ProxyConfig.self, from: Data(old.utf8))

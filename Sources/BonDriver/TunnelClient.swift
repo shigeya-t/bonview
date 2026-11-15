@@ -7,7 +7,7 @@ import Foundation
 ///   origin as NUL-terminated UTF-16LE in 512 bytes. Reply: DWORD; for Crea the low 4 bits are
 ///   the IBonDriver version (0 = failed) and the rest is the session ID.
 /// * command, 16 bytes: 4-char name + sequence number + param1 + param2. Reply: one DWORD,
-///   or for strings a WCHAR count (including NUL, 0 = NULL) followed by the characters.
+///   or for strings a WCHAR count (including NUL, 0 = NULL, at most 256) followed by the characters.
 /// * TS is pulled with `GTsS`: reply `[4 + size][remain][TS bytes]`.
 ///
 /// On a broken connection the client reconnects with `Conn` + session ID and repeats the last
@@ -149,7 +149,11 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
 
     private func string(_ cmd: String, _ p1: UInt32 = 0, _ p2: UInt32 = 0) throws -> String? {
         try transact(cmd, p1, p2) { s in
-            let n = Int(try s.readExactly(4).leUInt32(at: 0) % 256)
+            // The server copies into a WCHAR[256]; a larger count would leave characters unread
+            // and desynchronise every following reply, so treat it as a protocol error.
+            let count = try s.readExactly(4).leUInt32(at: 0)
+            guard count <= 256 else { throw BonDriverError.rejected(cmd) }
+            let n = Int(count)
             if n == 0 { return nil }
             let d = try s.readExactly(n * 2)
             var units: [UInt16] = []

@@ -72,6 +72,21 @@ import Testing
         client.release()
     }
 
+    @Test func rejectsOverlongString() throws {
+        // A WCHAR count over 256 used to be read modulo 256, leaving bytes behind that were then
+        // parsed as the next reply. It is now a protocol error.
+        let server = try MockTunnelServer()
+        server.tunerName = String(repeating: "あ", count: 300)
+        server.start()
+        defer { server.stop() }
+
+        let client = try TunnelClient.connect(config: TunnelConfig(address: "127.0.0.1", port: server.port, origin: "Mock-T"))
+        try? client.openTuner()
+        #expect(client.tunerName == "BonDriver_Tunnel")
+        #expect(client.enumTuningSpace(0) == nil)
+        client.release()
+    }
+
     @Test func rejectsUnknownOrigin() throws {
         let server = try MockTunnelServer()
         server.start()

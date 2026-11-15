@@ -306,8 +306,10 @@ public struct CaptionScreen: Equatable, Sendable {
         }
     }
 
-    private var cellW: Double { (charW + hSpace) * scale.0 }
-    private var cellH: Double { (charH + vSpace) * scale.1 }
+    // At least one dot, so the active position always moves (a zero-sized cell from SSM/SHS/SVS
+    // would otherwise make RPC 0 and line wrapping spin forever).
+    private var cellW: Double { max((charW + hSpace) * scale.0, 1) }
+    private var cellH: Double { max((charH + vSpace) * scale.1, 1) }
 
     private mutating func ensurePosition() {
         if !hasPosition { x = areaX; y = areaY + cellH; hasPosition = true }
@@ -377,15 +379,18 @@ public struct CaptionScreen: Equatable, Sendable {
         case .enclosure(let e): enclosure = e
         case .repeatNext(let n): repeatCount = n
         case .csi(let f, let p):
-            func v(_ k: Int) -> Double { p.indices.contains(k) ? Double(p[k]) : 0 }
+            // Parameters are clamped to the caption plane: the stream is untrusted and an area or
+            // cell of millions of dots would make a single statement lay out millions of glyphs.
+            let pw = frame.planeWidth, ph = frame.planeHeight
+            func v(_ k: Int, _ limit: Double) -> Double { p.indices.contains(k) ? min(Double(max(p[k], 0)), limit) : 0 }
             switch f {
             case 0x53: setFormatKeepingGlyphs(p.first ?? 7)                      // SWF
-            case 0x56: areaW = v(0); areaH = v(1); hasPosition = false           // SDF
-            case 0x5F: areaX = v(0); areaY = v(1); hasPosition = false           // SDP
-            case 0x57: charW = v(0); charH = v(1)                                // SSM
-            case 0x58: hSpace = v(0)                                             // SHS
-            case 0x59: vSpace = v(0)                                             // SVS
-            case 0x61: x = v(0); y = v(1); hasPosition = true                    // ACPS
+            case 0x56: areaW = v(0, pw); areaH = v(1, ph); hasPosition = false   // SDF
+            case 0x5F: areaX = v(0, pw); areaY = v(1, ph); hasPosition = false   // SDP
+            case 0x57: charW = v(0, pw); charH = v(1, ph)                        // SSM
+            case 0x58: hSpace = v(0, pw)                                         // SHS
+            case 0x59: vSpace = v(0, ph)                                         // SVS
+            case 0x61: x = v(0, pw); y = v(1, ph); hasPosition = true            // ACPS
             default: break
             }
         }
@@ -398,7 +403,10 @@ public struct CaptionScreen: Equatable, Sendable {
     }
 
     private mutating func put(_ content: CaptionGlyph.Content) {
-        let times = repeatCount == 0 ? Int.max : max(repeatCount, 1)
+        // RPC 0 repeats to the end of the line; a line never holds more than areaW / cellW cells
+        // (+1 for an active position left of the area), which also bounds a malformed stream.
+        let toEndOfLine = repeatCount == 0
+        let times = toEndOfLine ? Int(areaW / cellW) + 1 : max(repeatCount, 1)
         repeatCount = 1
         var n = 0
         while n < times {
@@ -415,7 +423,7 @@ public struct CaptionScreen: Equatable, Sendable {
             let row = y
             advance()
             n += 1
-            if times == .max && y != row { break } // RPC 0: to the end of the line
+            if toEndOfLine && y != row { break } // RPC 0: to the end of the line
         }
     }
 }

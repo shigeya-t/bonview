@@ -9,6 +9,7 @@ final class MockTunnelServer: @unchecked Sendable {
     private let listenFD: Int32
 
     var origin = "Mock-T"
+    var tunerName = "Mock Tuner"
     var spaces: [(String, [String])] = [("地デジ", ["NHK総合", "Eテレ"])]
     var tsChunks = 5
     var chunk = Data(repeating: 0x47, count: 188 * 100)
@@ -96,7 +97,7 @@ final class MockTunnelServer: @unchecked Sendable {
             } else {
                 switch name {
                 case "Open", "Purg", "Clos": reply = dw(name == "Open" ? 1 : 0)
-                case "GTun": reply = wstr("Mock Tuner")
+                case "GTun": reply = wstr(tunerName)
                 case "ETun": reply = wstr(Int(p1) < spaces.count ? spaces[Int(p1)].0 : nil)
                 case "ECha":
                     let sp = Int(p1), ch = Int(p2)

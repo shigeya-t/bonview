@@ -277,3 +277,36 @@ enum TSBuilder {
         #expect(title(125 * 60) == nil)      // both over
     }
 }
+
+@Suite struct PESAssemblerLimitTests {
+    static func push(_ asm: inout PESAssembler, _ bytes: [UInt8], unitStart: Bool, into out: inout [PESPacket]) {
+        bytes.withUnsafeBytes { buf in asm.push(buf, unitStart: unitStart) { out.append($0) } }
+    }
+
+    @Test func unboundedPESIsEmittedAtNextUnitStart() {
+        var asm = PESAssembler()
+        var out: [PESPacket] = []
+        // PES_packet_length 0 (video), header with no PTS, then 1000 continuation packets.
+        let start: [UInt8] = [0, 0, 1, 0xE0, 0, 0, 0x80, 0x00, 0x00] + [UInt8](repeating: 0xAB, count: 175)
+        Self.push(&asm, start, unitStart: true, into: &out)
+        for _ in 0..<1000 { Self.push(&asm, [UInt8](repeating: 0xCD, count: 184), unitStart: false, into: &out) }
+        #expect(out.isEmpty)
+        Self.push(&asm, start, unitStart: true, into: &out)
+        #expect(out.count == 1)
+        #expect(out.first?.payload.count == 175 + 1000 * 184)
+    }
+
+    @Test func runawayPESIsDropped() {
+        var asm = PESAssembler()
+        var out: [PESPacket] = []
+        let start: [UInt8] = [0, 0, 1, 0xE0, 0, 0, 0x80, 0x00, 0x00] + [UInt8](repeating: 0xAB, count: 175)
+        Self.push(&asm, start, unitStart: true, into: &out)
+        let chunk = [UInt8](repeating: 0xCD, count: 184)
+        for _ in 0..<(PESAssembler.maxSize / 184 + 10) { Self.push(&asm, chunk, unitStart: false, into: &out) }
+        // The oversized PES was discarded; the next one starts clean.
+        Self.push(&asm, start, unitStart: true, into: &out)
+        #expect(out.isEmpty)
+        Self.push(&asm, start, unitStart: true, into: &out)
+        #expect(out.first?.payload.count == 175)
+    }
+}
