@@ -192,6 +192,32 @@ enum CaptionBuilder {
         #expect(screen.lines == ["一二", "三"])
     }
 
+    @Test func repeatToEndOfLineWithZeroSizedCellsTerminates() {
+        // SSM 0;0, SHS 0, SVS 0 → a zero-sized cell. RPC 0 used to loop forever because the
+        // active position never moved.
+        var screen = CaptionScreen()
+        screen.apply(Self.header + Self.csi("0;0", 0x57) + Self.csi("0", 0x58) + Self.csi("0", 0x59)
+                     + [0x98, 0x40] + CaptionBuilder.kanji("ー"))
+        #expect(screen.frame.glyphs.count <= 621)
+        #expect(!screen.frame.glyphs.isEmpty)
+    }
+
+    @Test func hugeDisplayAreaIsClampedToPlane() {
+        // SDF of 99,999,999 dots with 1-dot cells must not lay out millions of glyphs.
+        var screen = CaptionScreen()
+        screen.apply(Self.csi("99999999;99999999", 0x56) + Self.csi("1;1", 0x57) + Self.csi("0", 0x58)
+                     + [0x98, 0x40] + CaptionBuilder.kanji("ー"))
+        #expect(screen.frame.glyphs.count <= 961)
+    }
+
+    @Test func repeatToEndOfLine() {
+        var screen = CaptionScreen()
+        // Area 200 dots wide, 40-dot cells → 5 per row; RPC 0 fills the rest of the row only.
+        screen.apply(Self.csi("200;480", 0x56) + CaptionBuilder.kanji("一") + [0x98, 0x40] + CaptionBuilder.kanji("ー")
+                     + CaptionBuilder.kanji("二"))
+        #expect(screen.lines == ["一ーーーー", "二"])
+    }
+
     @Test func repeatCharacter() {
         var screen = CaptionScreen()
         screen.apply([0x98, 0x43] + CaptionBuilder.kanji("ー"))

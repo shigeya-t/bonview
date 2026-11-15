@@ -1,5 +1,6 @@
 #include "tvffmpeg.h"
 
+#include <limits.h>
 #include <libavcodec/avcodec.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersink.h>
@@ -337,7 +338,8 @@ static void handle_audio(TVDecoder *d, AVFrame *f) {
         av_channel_layout_copy(&d->swrLayout, &f->ch_layout);
     }
     int cap = swr_get_out_samples(d->swr, f->nb_samples);
-    if (cap <= 0) return;
+    // Stereo floats: cap * 2 must not overflow int (abufCap) — AAC frames are 1024–2048 samples.
+    if (cap <= 0 || cap > INT_MAX / 2) return;
     if (cap * 2 > d->abufCap) {
         free(d->abuf);
         d->abufCap = cap * 2;

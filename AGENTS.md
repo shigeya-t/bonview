@@ -58,6 +58,11 @@ When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh
 - **The EPG grab uses a second server connection.** With one tuner (or equal channel-lock priorities)
   BonDriverProxyEx may move the viewer's tuner; `checkTunerSharing` cancels the grab and retunes when the
   viewing stream's EIT p/f TSID turns into the channel being grabbed.
+- **Copy-on-write in assembler dictionaries:** `var asm = dict[pid]; asm.push(…); dict[pid] = asm` keeps two
+  references to the buffer, so every append copies the whole PES/section. Use `dict.removeValue(forKey:)`, mutate,
+  and put it back (`TSDemuxer`, `EPGCollector`).
+- **Captions and TS are untrusted input.** Caption CSI parameters are clamped to the plane, cells are at least
+  one dot and RPC 0 is bounded by the line width; `PESAssembler` drops PES over `maxSize`.
 - **`tsHandler` is read on the driver's receive thread.** Don't reassign it while streaming; `AppModel`
   routes through `TSRouter` (lock-protected) to switch between player and scanner.
 - **AAC PES contain several frames; only the first gets a PTS.** `tvffmpeg.c` continues the timeline

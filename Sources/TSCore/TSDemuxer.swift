@@ -82,6 +82,9 @@ public final class TSDemuxer {
     private var splitter = TSPacketSplitter()
     private var sections: [UInt16: SectionAssembler] = [:]
     private var pes: [UInt16: PESAssembler] = [:]
+    /// Bumped when `reset` (both) or a new selection (`pes` only) rebuilds the assemblers, so one
+    /// taken out of the dictionary during a callback isn't put back over the new state.
+    private var sectionGeneration = 0, pesGeneration = 0
     private var lastCC: [UInt16: UInt8] = [:]
     private var pat: PAT?
     private var pmtPIDs: [UInt16: UInt16] = [:] // PID → program number
@@ -101,6 +104,8 @@ public final class TSDemuxer {
     /// Forget everything (call after a channel change).
     public func reset() {
         splitter.reset()
+        sectionGeneration &+= 1
+        pesGeneration &+= 1
         sections.removeAll()
         pes.removeAll()
         lastCC.removeAll()
@@ -166,13 +171,16 @@ public final class TSDemuxer {
         }
 
         if pid == 0x0000 || pid == Self.nitPID || pid == Self.sdtPID || pid == Self.totPID || Self.eitPIDs.contains(pid) || pmtPIDs[pid] != nil {
-            var asm = sections[pid] ?? SectionAssembler()
+            // Take the assembler out of the dictionary while appending: a copy left behind would
+            // share the buffer and force a full copy of it on every packet.
+            var asm = sections.removeValue(forKey: pid) ?? SectionAssembler()
+            let generation = sectionGeneration
             asm.push(payload, unitStart: p.payloadUnitStart) { section(pid, $0) }
-            sections[pid] = asm
+            if generation == sectionGeneration { sections[pid] = asm }
             return
         }
 
-        if var asm = pes[pid], let sel = selection {
+        if pes[pid] != nil, let sel = selection {
             let track: Track
             let info: ElementaryStreamInfo
             if let v = sel.video, v.pid == pid { track = .video; info = v }
@@ -180,8 +188,11 @@ public final class TSDemuxer {
             else if let c = sel.caption, c.pid == pid { track = .caption; info = c }
             else if let c = sel.superimpose, c.pid == pid { track = .superimpose; info = c }
             else { return }
+            // Same as for sections: mutate a uniquely referenced assembler.
+            guard var asm = pes.removeValue(forKey: pid) else { return }
+            let generation = pesGeneration
             asm.push(payload, unitStart: p.payloadUnitStart) { onPES?(track, info, $0) }
-            pes[pid] = asm
+            if generation == pesGeneration { pes[pid] = asm }
         }
     }
 
@@ -288,6 +299,7 @@ public final class TSDemuxer {
         guard new != selection else { return }
         let serviceChanged = new?.serviceID != selection?.serviceID
         selection = new
+        pesGeneration &+= 1
         pes.removeAll()
         if let v = new?.video { pes[v.pid] = PESAssembler() }
         if let a = new?.audio { pes[a.pid] = PESAssembler() }

@@ -20,6 +20,9 @@ public struct ProxyConfig: Codable, Hashable, Sendable {
 
     /// Upper bound of one TS packet payload accepted from the server (TSPACKET_BUFSIZE).
     public var tsPacketBufSize: Int
+    /// Largest `tsPacketBufSize` honoured. The ini that sets it also picks the server, so a huge
+    /// value must not let that server make the client allocate without limit.
+    public static let maxTsPacketBufSize = 16 << 20
     /// Ask HaijinW BonDriverProxyEx to descramble (B25=1 of its BonDriver_Proxy.ini).
     /// The server descrambles only when its own ini also has B25=1; other servers ignore it.
     public var requestB25: Bool
@@ -92,7 +95,7 @@ public struct ProxyConfig: Codable, Hashable, Sendable {
         var cfg = ProxyConfig(address: address, port: port, bonDriver: driver)
         if let v = values["CHANNEL_LOCK"], let n = Int(v) { cfg.channelLock = UInt8(clamping: n) }
         if let v = values["CONNECT_TIMEOUT"], let n = Int(v), n > 0 { cfg.connectTimeout = n }
-        if let v = values["TSPACKET_BUFSIZE"], let n = Int(v), n > 0 { cfg.tsPacketBufSize = n }
+        if let v = values["TSPACKET_BUFSIZE"], let n = Int(v), n > 0 { cfg.tsPacketBufSize = min(n, ProxyConfig.maxTsPacketBufSize) }
         if let v = values["B25"], let n = Int(v) { cfg.requestB25 = n != 0 }
         if let v = values["USE_MAGICPACKET"], let n = Int(v) { cfg.useMagicPacket = n != 0 }
         if let mac = values["TARGET_MACADDRESS"] {

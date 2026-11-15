@@ -283,7 +283,7 @@ public final class EPGCollector: @unchecked Sendable {
     private func process(_ data: Data) {
         splitter.split(data) { p in
             guard !p.transportError, p.scramblingControl == 0, Self.pids.contains(p.pid), let payload = p.payload else { return }
-            var asm = sections[p.pid] ?? SectionAssembler()
+            var asm = sections.removeValue(forKey: p.pid) ?? SectionAssembler() // keep the buffer uniquely referenced
             asm.push(payload, unitStart: p.payloadUnitStart) { section($0) }
             sections[p.pid] = asm
         }
