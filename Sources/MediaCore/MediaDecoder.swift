@@ -32,6 +32,8 @@ final class MediaDecoder {
     var onVideo: ((CVPixelBuffer, Int64?) -> Void)?
     /// Interleaved float32 stereo PCM: samples, frames, channels, sampleRate, PTS.
     var onAudio: ((UnsafePointer<Float>, Int, Int, Int, Int64?) -> Void)?
+    /// Copies Metal-deinterlaced pictures out of FFmpeg's frame pool (created on first use).
+    private var copier: PixelBufferCopier?
 
     init?(streamType: UInt8, pid: UInt16, hardware: Bool, deinterlace: DeinterlaceMode, gpuDeinterlace: Bool = false) {
         guard let d = tv_decoder_create(Int32(streamType), hardware ? 1 : 0, deinterlace.cValue, gpuDeinterlace ? 1 : 0) else { return nil }
@@ -42,7 +44,14 @@ final class MediaDecoder {
         tv_decoder_set_video_callback(raw, { ctx, pb, pts, _, _ in
             guard let ctx, let pb else { return }
             let me = Unmanaged<MediaDecoder>.fromOpaque(ctx).takeUnretainedValue()
-            me.onVideo?(pb, pts == Int64.min ? nil : pts)
+            var picture = pb
+            if tv_decoder_output_is_recycled(me.raw) != 0 {
+                // FFmpeg reuses this buffer after we return: keep a GPU copy instead.
+                if me.copier == nil { me.copier = PixelBufferCopier() }
+                guard let copy = me.copier?.copy(pb) else { return }
+                picture = copy
+            }
+            me.onVideo?(picture, pts == Int64.min ? nil : pts)
         }, ctx)
         tv_decoder_set_audio_callback(raw, { ctx, samples, frames, channels, rate, pts in
             guard let ctx, let samples else { return }

@@ -51,6 +51,11 @@ TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace, i
 
 /// Whether the loaded FFmpeg was built with Metal deinterlacing (hwupload + yadif_videotoolbox).
 int tv_gpu_deinterlace_available(void);
+
+/// Inside the video callback: nonzero when the pixel buffer belongs to FFmpeg's VideoToolbox frame
+/// pool, which hands it out again as soon as the callback returns (whatever CoreVideo retains it
+/// has). The callback must copy it before keeping it.
+int tv_decoder_output_is_recycled(TVDecoder *dec);
 void tv_decoder_destroy(TVDecoder *dec);
 
 void tv_decoder_set_video_callback(TVDecoder *dec, tv_video_callback cb, void *ctx);

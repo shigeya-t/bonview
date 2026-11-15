@@ -57,6 +57,7 @@ struct TVDecoder {
     int wantGPUDeinterlace;
     int gpuFailed;          // the Metal graph could not be built: stay on bwdif
     int gpuGraph;           // the current graph is the Metal one
+    int recycledOutput;     // the picture being delivered is reused by FFmpeg after the callback
     AVBufferRef *vtDevice;  // for hwupload
     AVFilterGraph *graph;
     AVFilterContext *src, *sink;
@@ -335,6 +336,8 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
 }
 
 /// A frame from the filter graph: a VideoToolbox pixel buffer (Metal graph) or a software frame.
+/// Metal output comes from FFmpeg's frame pool and is reused as soon as the frame is unreferenced;
+/// the callback must copy it (`tv_decoder_output_is_recycled`).
 static void emit_filtered_frame(TVDecoder *d, AVFrame *f, int64_t pts) {
     if (f->format != AV_PIX_FMT_VIDEOTOOLBOX) {
         emit_software_frame(d, f, pts);
@@ -344,8 +347,12 @@ static void emit_filtered_frame(TVDecoder *d, AVFrame *f, int64_t pts) {
     if (!pb || !d->vcb) return;
     attach_color(pb, f);
     attach_par(pb, f->sample_aspect_ratio);
+    d->recycledOutput = 1;
     d->vcb(d->vctx, pb, pts, f->sample_aspect_ratio.num, f->sample_aspect_ratio.den);
+    d->recycledOutput = 0;
 }
+
+int tv_decoder_output_is_recycled(TVDecoder *d) { return d->recycledOutput; }
 
 static void handle_video(TVDecoder *d, AVFrame *f) {
     if (f->format == AV_PIX_FMT_VIDEOTOOLBOX) {

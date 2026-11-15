@@ -50,6 +50,22 @@ import TSCore
         var videoCodec = ""
         var pixelFormat: OSType = 0
         var matrix: String?
+        /// Held pictures (like the display layer's queue) whose content changed after delivery.
+        var overwrittenFrames = 0
+    }
+
+    /// Sparse luma checksum, enough to tell pictures of a moving test pattern apart.
+    static func checksum(_ pb: CVPixelBuffer) -> UInt64 {
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(pb, 0)?.assumingMemoryBound(to: UInt8.self) else { return 0 }
+        let stride = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+        let w = CVPixelBufferGetWidthOfPlane(pb, 0), h = CVPixelBufferGetHeightOfPlane(pb, 0)
+        var sum: UInt64 = 0
+        for y in Swift.stride(from: 0, to: h, by: 17) {
+            for x in Swift.stride(from: 0, to: w, by: 11) { sum = sum &* 31 &+ UInt64(base[y * stride + x]) }
+        }
+        return sum
     }
 
     static func decode(_ url: URL, hardware: Bool, deinterlace: DeinterlaceMode, gpu: Bool = false) throws -> Result {
@@ -58,6 +74,8 @@ import TSCore
         var video: MediaDecoder?
         var audio: MediaDecoder?
         var r = Result()
+        // Keep the latest pictures alive for a while, as the presenter's display queue does.
+        var held: [(CVPixelBuffer, UInt64)] = []
         demux.onSelectionChanged = { sel in
             guard let sel else { return }
             if let v = sel.video {
@@ -68,6 +86,11 @@ import TSCore
                     if let d = CVBufferCopyAttachment(pb, kCVImageBufferPixelAspectRatioKey, nil) as? [String: Int] {
                         r.par = (d[kCVImageBufferPixelAspectRatioHorizontalSpacingKey as String] ?? 0,
                                  d[kCVImageBufferPixelAspectRatioVerticalSpacingKey as String] ?? 0)
+                    }
+                    held.append((pb, Self.checksum(pb)))
+                    if held.count > 60 {
+                        let (old, sum) = held.removeFirst()
+                        if Self.checksum(old) != sum { r.overwrittenFrames += 1 }
                     }
                     r.pixelFormat = CVPixelBufferGetPixelFormatType(pb)
                     r.matrix = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil) as? String
@@ -105,6 +128,7 @@ import TSCore
             i += n
         }
         if let video { r.videoCodec = video.description } // names the deinterlacer once it ran
+        r.overwrittenFrames += held.filter { Self.checksum($0.0) != $0.1 }.count
         return r
     }
 
@@ -162,6 +186,8 @@ import TSCore
         #expect(r.size == CGSize(width: 1440, height: 1080))
         #expect(r.par.map { $0.0 * 3 == $0.1 * 4 } == true, "PAR \(String(describing: r.par))")
         #expect(r.matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String))
+        // Pictures must not be recycled while still held downstream (FFmpeg's VideoToolbox pool does).
+        #expect(r.overwrittenFrames == 0, "overwritten: \(r.overwrittenFrames)")
         let expected = mode == .fieldRate ? 59.94 : 29.97
         #expect(Double(r.frames) > expected * 3 * 0.8, "frames: \(r.frames)")
         if let a = r.firstVideoPTS, let b = r.lastVideoPTS {
@@ -173,6 +199,7 @@ import TSCore
     @Test(.enabled(if: ffmpeg != nil)) func mpeg2CPUDeinterlaceWhenGPUOff() throws {
         let r = try Self.decode(try Self.interlacedMPEG2(), hardware: true, deinterlace: .fieldRate, gpu: false)
         #expect(r.videoCodec.hasSuffix("+ bwdif"), "\(r.videoCodec)")
+        #expect(r.overwrittenFrames == 0, "overwritten: \(r.overwrittenFrames)")
     }
 
     @Test(.enabled(if: ffmpeg != nil)) func h264ViaVideoToolbox() throws {
