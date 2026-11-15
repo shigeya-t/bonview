@@ -50,7 +50,7 @@ import TSCore
         var videoCodec = ""
     }
 
-    static func decode(_ url: URL, hardware: Bool, deinterlace: Bool) throws -> Result {
+    static func decode(_ url: URL, hardware: Bool, deinterlace: DeinterlaceMode) throws -> Result {
         let data = try Data(contentsOf: url)
         let demux = TSDemuxer()
         var video: MediaDecoder?
@@ -73,7 +73,7 @@ import TSCore
                 r.videoCodec = video?.description ?? ""
             }
             if let a = sel.audio {
-                audio = MediaDecoder(streamType: a.streamType, pid: a.pid, hardware: false, deinterlace: false)
+                audio = MediaDecoder(streamType: a.streamType, pid: a.pid, hardware: false, deinterlace: .off)
                 audio?.onAudio = { _, frames, ch, rate, pts in
                     #expect(ch == 2)
                     if let pts {
@@ -110,7 +110,7 @@ import TSCore
             "-vf", "setsar=4/3,setfield=tff", "-c:v", "mpeg2video", "-b:v", "12M", "-flags", "+ilme+ildct",
             "-c:a", "aac", "-ac", "2",
         ])
-        let r = try Self.decode(url, hardware: true, deinterlace: true)
+        let r = try Self.decode(url, hardware: true, deinterlace: .fieldRate)
         #expect(r.videoCodec.hasPrefix("mpeg2video"))
         #expect(r.size == CGSize(width: 1440, height: 1080))
         #expect(r.par.map { $0.0 * 3 == $0.1 * 4 } == true, "PAR \(String(describing: r.par))")
@@ -127,13 +127,28 @@ import TSCore
         #expect(r.audioGaps == 0)
     }
 
+    @Test(.enabled(if: ffmpeg != nil)) func mpeg2InterlacedDeinterlacedToFrameRate() throws {
+        let url = try Self.makeTS("mpeg2i-30p", [
+            "-f", "lavfi", "-i", "testsrc2=size=1440x1080:rate=30000/1001", "-t", "3",
+            "-vf", "setsar=4/3,setfield=tff", "-c:v", "mpeg2video", "-b:v", "12M", "-flags", "+ilme+ildct",
+        ])
+        let r = try Self.decode(url, hardware: true, deinterlace: .frameRate)
+        #expect(r.size == CGSize(width: 1440, height: 1080))
+        // bwdif send_frame: one picture per frame (~90 in 3 s), not one per field.
+        #expect(r.frames > 75 && r.frames < 100, "frames: \(r.frames)")
+        if let a = r.firstVideoPTS, let b = r.lastVideoPTS {
+            let fps = Double(r.frames - 1) / (Double(b - a) / 90000)
+            #expect(abs(fps - 29.97) < 1, "fps \(fps)")
+        }
+    }
+
     @Test(.enabled(if: ffmpeg != nil)) func h264ViaVideoToolbox() throws {
         let url = try Self.makeTS("h264", [
             "-f", "lavfi", "-i", "testsrc2=size=1920x1080:rate=30000/1001",
             "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "3",
             "-c:v", Self.hasEncoder("libx264") ? "libx264" : "h264_videotoolbox", "-pix_fmt", "yuv420p", "-c:a", "aac",
         ])
-        let r = try Self.decode(url, hardware: true, deinterlace: true)
+        let r = try Self.decode(url, hardware: true, deinterlace: .fieldRate)
         #expect(r.videoCodec == "h264 (VideoToolbox)")
         #expect(r.size == CGSize(width: 1920, height: 1080))
         #expect(r.frames > 80, "frames: \(r.frames)")

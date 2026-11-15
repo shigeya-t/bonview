@@ -83,7 +83,7 @@ public final class TSPlayer: @unchecked Sendable {
 
     // Options (read on the player queue).
     private var hardwareDecoding = true
-    private var deinterlace = true
+    private var deinterlace = DeinterlaceMode.fieldRate
     private var dualMono: DualMonoMode = .both
     /// Dual-mono detection with hysteresis: the flag flips after this many agreeing frames.
     private var dualMonoVotes = 0
@@ -178,10 +178,10 @@ public final class TSPlayer: @unchecked Sendable {
         }
     }
 
-    public func setDeinterlace(_ on: Bool) {
+    public func setDeinterlace(_ mode: DeinterlaceMode) {
         queue.async { [self] in
-            guard deinterlace != on else { return }
-            deinterlace = on
+            guard deinterlace != mode else { return }
+            deinterlace = mode
             video = nil
             if let sel = demuxer.selection { makeDecoders(sel) }
         }
@@ -212,7 +212,7 @@ public final class TSPlayer: @unchecked Sendable {
         }
         if let a = sel.audio {
             if audio?.pid != a.pid || audio?.streamType != a.streamType {
-                audio = MediaDecoder(streamType: a.streamType, pid: a.pid, hardware: false, deinterlace: false)
+                audio = MediaDecoder(streamType: a.streamType, pid: a.pid, hardware: false, deinterlace: .off)
                 setDualMonoDetected(false)
                 audio?.onAudio = { [weak self] s, f, c, r, pts in self?.presentAudio(s, f, c, r, pts) }
                 flushed = true

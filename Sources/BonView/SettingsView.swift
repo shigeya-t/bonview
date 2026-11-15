@@ -21,7 +21,11 @@ private struct PlaybackSettings: View {
         @Bindable var model = model
         Form {
             Toggle("H.264 / HEVC をハードウェアデコードする (VideoToolbox)", isOn: $model.hardwareDecoding)
-            Toggle("インターレース解除 (bwdif, 59.94p)", isOn: $model.deinterlace)
+            Picker("インターレース解除 (bwdif)", selection: $model.deinterlace) {
+                Text("オフ").tag(DeinterlaceMode.off)
+                Text("29.97p (CPU 負荷 小)").tag(DeinterlaceMode.frameRate)
+                Text("59.94p (なめらか)").tag(DeinterlaceMode.fieldRate)
+            }
             Section("スクリーンショット") {
                 LabeledContent("保存先") {
                     HStack {

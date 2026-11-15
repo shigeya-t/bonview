@@ -1,6 +1,7 @@
 import ChannelScan
 import BonDriver
 import Foundation
+import MediaCore
 
 /// One selectable "BonDriver" entry (the driver list): a remote tuner reached through
 /// BonDriverProxy(Ex) or BonDriverTunnel.
@@ -153,6 +154,14 @@ enum Preferences {
 
     static func bool(_ key: String, default d: Bool) -> Bool {
         UserDefaults.standard.object(forKey: key) as? Bool ?? d
+    }
+
+    /// `deinterlaceMode`, falling back to the older on/off `deinterlace` key (on = 59.94p).
+    static var deinterlaceMode: DeinterlaceMode {
+        if let raw = UserDefaults.standard.string(forKey: "deinterlaceMode"), let mode = DeinterlaceMode(rawValue: raw) {
+            return mode
+        }
+        return bool("deinterlace", default: true) ? .fieldRate : .off
     }
 
     /// Where screenshots go: the saved folder, or ~/Pictures/BonView.

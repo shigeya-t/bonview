@@ -57,7 +57,7 @@ Mac 側にドライバーやカードリーダーは要りません。
   - Windows 用の `BonDriver_Proxy.ini`、Linux 用の `BonDriver_Proxy.so.conf`、BonDriver_Tunnel 用の `BonDriver_*.ini` をそのまま読み込めます。
 - **ネイティブのデコードと表示**
   - H.264 / HEVC は VideoToolbox でハードウェアデコードします。
-  - MPEG-2 は FFmpeg でデコードし、bwdif でインターレースを解除して 59.94p で表示します。
+  - MPEG-2 は FFmpeg でデコードし、bwdif でインターレースを解除して 59.94p で表示します。CPU 負荷を下げたいときは設定で 29.97p に切り替えられます。
   - 映像と音声は `AVSampleBufferRenderSynchronizer` で同期させます。ネットワークの揺らぎは自動で吸収します。
 - **放送の情報を表示**
   - PAT / PMT / SDT / EIT（現在と次の番組）/ TOT を解析し、局名・番組名・放送時刻を表示します。文字は ARIB STD-B24 の 8 単位符号に対応しています。
@@ -219,7 +219,7 @@ C:\DTV\
 
 「読み込み…」から既存の `BonDriver_Proxy.ini` / `.so.conf` / BonDriver_Tunnel 用の ini を取り込めます。どの方式かは自動で判別します。
 
-再生タブでは、ハードウェアデコードとインターレース解除の有効 / 無効を切り替えられます。
+再生タブでは、ハードウェアデコードの有効 / 無効と、インターレース解除 (オフ / 29.97p / 59.94p) を切り替えられます。29.97p は 59.94p より動きの滑らかさが落ちますが、CPU 使用率が下がります。
 
 ## 使い方
 

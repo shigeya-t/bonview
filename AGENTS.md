@@ -77,9 +77,12 @@ When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh
   `BonView/CaptionPlaneView` renders frames (Canvas); `scripts/make_demo_ts.py --captions` exercises it.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
   `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
-  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `epgLastGrab.<uuid>`.
+  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `epgLastGrab.<uuid>`, `deinterlaceMode` (`DeinterlaceMode` raw value; falls back to the older `deinterlace` bool).
   Programme guide data is not in UserDefaults: `~/Library/Application Support/BonView/EPG/<uuid>.json` (`EPGStore` Codable, tagged with `ARIBString.decoderRevision`; bump it when decoded text changes so stale files are dropped and re-grabbed). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
+- **Anything that changes `AppModel.epg` or `broadcastTime` re-renders the whole 番組表 grid and channel list**
+  (Japanese line breaking is expensive). Guide data goes through `queueEPG` / `publishEPG` (merged at most every
+  10 s); views that only need the minute use `programClock`, not `broadcastTime`.
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;
   update those comments together with the code.
 

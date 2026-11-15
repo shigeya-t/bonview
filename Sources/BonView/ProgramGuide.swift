@@ -22,6 +22,23 @@ struct EPGGrabProgress: Equatable {
 extension AppModel {
     /// Re-grab automatically when the last full grab is older than this.
     static let epgAutoGrabInterval: TimeInterval = 6 * 3600
+    /// Minimum time between merges of new guide data into `epg` (see `epgPending`).
+    static let epgPublishInterval: TimeInterval = 10
+
+    /// Queue guide updates; they reach `epg` on the next `publishEPG`.
+    func queueEPG(_ updates: EPGStore) {
+        guard !updates.isEmpty else { return }
+        epgPending.merge(updates)
+        epgDirty = true
+    }
+
+    /// Merge queued updates into `epg` when `epgPublishInterval` has passed (or `force`).
+    func publishEPG(force: Bool = false) {
+        guard !epgPending.isEmpty, force || Date().timeIntervalSince(epgLastPublish) >= Self.epgPublishInterval else { return }
+        epg.merge(epgPending)
+        epgPending = EPGStore()
+        epgLastPublish = Date()
+    }
 
     func epgKey(_ e: ScannedEntry) -> EPGServiceKey? {
         epg.key(originalNetworkID: e.channel.originalNetworkID, transportStreamID: e.channel.transportStreamID,
@@ -116,8 +133,7 @@ extension AppModel {
         case .finished(_, let complete):
             if complete { p.completeChannels += 1 }
         case .updates(let u):
-            epg.merge(u)
-            epgDirty = true
+            queueEPG(u)
         }
         epgGrab = p
     }
@@ -138,11 +154,8 @@ extension AppModel {
 
     /// Called every second from the main timer.
     func epgTick() {
-        let u = passiveEPG.takeUpdates()
-        if !u.isEmpty {
-            epg.merge(u)
-            epgDirty = true
-        }
+        queueEPG(passiveEPG.takeUpdates())
+        publishEPG()
         checkTunerSharing()
         if epgDirty, Date().timeIntervalSince(epgLastSave) > 300 { saveEPG() }
         // Automatic grabs: once per connection, then every few hours; not again after an error or a cancel.
@@ -171,6 +184,7 @@ extension AppModel {
 
     func loadEPG(_ profile: ServerProfile) {
         epg = EPGStore()
+        epgPending = EPGStore()
         epgDirty = false
         epgGrab = nil
         epgLastGrab = Preferences.epgLastGrab(for: profile.id)
@@ -205,6 +219,7 @@ extension AppModel {
 
     func saveEPG() {
         guard epgDirty, let profile = currentProfile else { return }
+        publishEPG(force: true)
         epgDirty = false
         epgLastSave = Date()
         var store = epg
@@ -221,6 +236,7 @@ extension AppModel {
         guard let profile = currentProfile else { return }
         cancelEPGGrab()
         epg = EPGStore()
+        epgPending = EPGStore()
         epgDirty = false
         epgLastGrab = nil
         epgGrab = nil

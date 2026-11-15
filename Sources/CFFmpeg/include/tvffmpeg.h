@@ -36,7 +36,15 @@ typedef struct TVDecoder TVDecoder;
 const char *tv_ffmpeg_missing_libraries(void);
 
 /// Create a decoder for the given TS stream_type. Returns NULL if unsupported.
-/// `useHardware`: try VideoToolbox for H.264/HEVC. `deinterlace`: bwdif (field-rate) for interlaced video.
+/// Deinterlacing of interlaced (software-decoded) video with bwdif.
+enum {
+    TV_DEINTERLACE_OFF = 0,
+    TV_DEINTERLACE_FIELD_RATE = 1, ///< one frame per field (59.94p for 1080i)
+    TV_DEINTERLACE_FRAME_RATE = 2, ///< one frame per frame (29.97p): about half the filter/conversion work
+};
+
+/// Create a decoder for the given TS stream_type. Returns NULL if unsupported.
+/// `useHardware`: try VideoToolbox for H.264/HEVC. `deinterlace`: a TV_DEINTERLACE_* mode.
 TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace);
 void tv_decoder_destroy(TVDecoder *dec);
 

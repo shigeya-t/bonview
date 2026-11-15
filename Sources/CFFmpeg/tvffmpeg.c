@@ -53,7 +53,7 @@ struct TVDecoder {
 
     // Video
     int wantHW, hwActive;
-    int deinterlace;
+    int deinterlace; // TV_DEINTERLACE_*
     AVFilterGraph *graph;
     AVFilterContext *src, *sink;
     int gW, gH, gFmt;
@@ -138,7 +138,7 @@ TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace) {
     if (!d) return NULL;
     d->streamType = streamType;
     d->wantHW = useHardware;
-    d->deinterlace = deinterlace;
+    d->deinterlace = (deinterlace == TV_DEINTERLACE_FIELD_RATE || deinterlace == TV_DEINTERLACE_FRAME_RATE) ? deinterlace : TV_DEINTERLACE_OFF;
     d->nextAudioPts = TV_NOPTS;
     d->pkt = av_packet_alloc();
     d->frame = av_frame_alloc();
@@ -275,7 +275,10 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
     inputs->filter_ctx = d->sink;
     inputs->pad_idx = 0;
     inputs->next = NULL;
-    ret = avfilter_graph_parse_ptr(d->graph, "bwdif=mode=send_field:parity=auto:deint=interlaced", &inputs, &outputs, NULL);
+    const char *spec = d->deinterlace == TV_DEINTERLACE_FRAME_RATE
+        ? "bwdif=mode=send_frame:parity=auto:deint=interlaced"
+        : "bwdif=mode=send_field:parity=auto:deint=interlaced";
+    ret = avfilter_graph_parse_ptr(d->graph, spec, &inputs, &outputs, NULL);
     avfilter_inout_free(&inputs);
     avfilter_inout_free(&outputs);
     if (ret < 0) goto fail;
@@ -299,7 +302,7 @@ static void handle_video(TVDecoder *d, AVFrame *f) {
         }
         return;
     }
-    if (!d->deinterlace) {
+    if (d->deinterlace == TV_DEINTERLACE_OFF) {
         emit_software_frame(d, f, to90k(f->best_effort_timestamp, kTB90k));
         return;
     }
