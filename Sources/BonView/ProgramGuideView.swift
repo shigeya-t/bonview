@@ -30,7 +30,7 @@ struct ProgramGuideView: View {
         return cal.startOfDay(for: shifted).addingTimeInterval(4 * 3600)
     }
 
-    private var now: Date { model.broadcastTime ?? Date() }
+    private var now: Date { model.programClock ?? Date() }
     private var dayStart: Date { Self.calendar.date(byAdding: .day, value: dayOffset, to: Self.broadcastDay(now))! }
     private var dayEnd: Date { dayStart.addingTimeInterval(24 * 3600) }
 

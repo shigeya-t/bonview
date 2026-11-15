@@ -88,7 +88,7 @@ final class AppModel {
 
     /// Programme on air on a scanned service, from EIT p/f seen while watching, else the programme guide.
     func currentProgram(_ e: ScannedEntry) -> EventInfo? {
-        let now = broadcastTime ?? Date()
+        let now = programClock ?? Date()
         return programCache.currentEvent(originalNetworkID: e.channel.originalNetworkID, transportStreamID: e.channel.transportStreamID,
                                          serviceID: e.service.serviceID, at: now)
             ?? epgKey(e).flatMap { epg.event(for: $0, at: now) }
@@ -115,7 +115,17 @@ final class AppModel {
     var followingEvent: EventInfo?
     /// Present / following events of every service seen while watching (channel list).
     var programCache = ProgramCache()
-    var broadcastTime: Date?
+    var broadcastTime: Date? {
+        didSet {
+            // Coarse copy for the channel list and the programme guide: TOT arrives every few
+            // seconds, and redrawing every programme title (Japanese line breaking) that often is
+            // a measurable share of the CPU.
+            let minute = broadcastTime.map { Date(timeIntervalSinceReferenceDate: ($0.timeIntervalSinceReferenceDate / 60).rounded(.down) * 60) }
+            if minute != programClock { programClock = minute }
+        }
+    }
+    /// `broadcastTime` truncated to the minute: changes once a minute.
+    private(set) var programClock: Date?
     var status = PlayerStatus()
     /// `status.isDualMono`, updated only when it changes. The menu bar (`AppCommands`) reads this
     /// instead of `status`: any observed change rebuilds the main menu, and rebuilding it while a
@@ -156,6 +166,10 @@ final class AppModel {
     @ObservationIgnored var epgGeneration = 0
     @ObservationIgnored var epgDirty = false
     @ObservationIgnored var epgLastSave = Date()
+    /// Guide updates not yet merged into `epg`. Every change to `epg` re-renders the whole guide
+    /// window and the channel list, so updates are published at most every `epgPublishInterval`.
+    @ObservationIgnored var epgPending = EPGStore()
+    @ObservationIgnored var epgLastPublish = Date.distantPast
     /// TSID of the channel the background grab is reading (tuner sharing check).
     @ObservationIgnored var epgGrabTSID: UInt16?
 
@@ -192,8 +206,8 @@ final class AppModel {
     var hardwareDecoding = Preferences.bool("hardwareDecoding", default: true) {
         didSet { player.setHardwareDecoding(hardwareDecoding); UserDefaults.standard.set(hardwareDecoding, forKey: "hardwareDecoding") }
     }
-    var deinterlace = Preferences.bool("deinterlace", default: true) {
-        didSet { player.setDeinterlace(deinterlace); UserDefaults.standard.set(deinterlace, forKey: "deinterlace") }
+    var deinterlace = Preferences.deinterlaceMode {
+        didSet { player.setDeinterlace(deinterlace); UserDefaults.standard.set(deinterlace.rawValue, forKey: "deinterlaceMode") }
     }
     var showCaptions = Preferences.bool("showCaptions", default: true) {
         didSet { UserDefaults.standard.set(showCaptions, forKey: "showCaptions") }
