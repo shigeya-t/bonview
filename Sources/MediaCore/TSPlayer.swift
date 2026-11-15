@@ -84,6 +84,7 @@ public final class TSPlayer: @unchecked Sendable {
     // Options (read on the player queue).
     private var hardwareDecoding = true
     private var deinterlace = DeinterlaceMode.fieldRate
+    private var gpuDeinterlace = true
     private var dualMono: DualMonoMode = .both
     /// Dual-mono detection with hysteresis: the flag flips after this many agreeing frames.
     private var dualMonoVotes = 0
@@ -187,6 +188,16 @@ public final class TSPlayer: @unchecked Sendable {
         }
     }
 
+    /// Deinterlace with Metal (yadif) instead of bwdif on the CPU, when the bundled FFmpeg supports it.
+    public func setGPUDeinterlace(_ on: Bool) {
+        queue.async { [self] in
+            guard gpuDeinterlace != on else { return }
+            gpuDeinterlace = on
+            video = nil
+            if let sel = demuxer.selection { makeDecoders(sel) }
+        }
+    }
+
     // MARK: - Pipeline
 
     private func selectionChanged(_ sel: StreamSelection?) {
@@ -203,7 +214,8 @@ public final class TSPlayer: @unchecked Sendable {
         var flushed = false
         if let v = sel.video {
             if video?.pid != v.pid || video?.streamType != v.streamType {
-                video = MediaDecoder(streamType: v.streamType, pid: v.pid, hardware: hardwareDecoding, deinterlace: deinterlace)
+                video = MediaDecoder(streamType: v.streamType, pid: v.pid, hardware: hardwareDecoding, deinterlace: deinterlace,
+                                     gpuDeinterlace: gpuDeinterlace)
                 video?.onVideo = { [weak self] pb, pts in self?.presentVideo(pb, pts) }
                 flushed = true
             }
@@ -363,6 +375,8 @@ public final class TSPlayer: @unchecked Sendable {
         lastScrambledSelected = st.scrambledSelectedPackets
         status.droppedPES = droppedPES
         status.bufferedSeconds = presenter.bufferedSeconds
+        // The deinterlacer (Metal / CPU) is known only after the first picture.
+        if let video { status.videoCodec = video.description }
         bytesWindow = 0
         windowStart = now
         let s = status

@@ -61,7 +61,7 @@ if (( ${#libs} )); then
   install_name_tool -delete_rpath "$FFMPEG_PREFIX/lib" "$APP/Contents/MacOS/BonView" 2>/dev/null || true
   FFMPEG_CREDITS="<h3>FFmpeg ${FFV}</h3>
 <p>映像・音声のデコードに <a href=\"https://ffmpeg.org/\">FFmpeg</a> を LGPL 2.1 以降で使っています（GPL の部品は含みません）。<br>
-Contents/Frameworks の dylib は差し替えられます。ビルド設定は scripts/build_ffmpeg.sh にあります。<br>
+Contents/Frameworks の dylib は差し替えられます。ビルド設定は scripts/build_ffmpeg.sh、適用している本家の修正は scripts/ffmpeg-patches/ にあります。<br>
 ソースは <a href=\"https://github.com/shigeya-t/bonview/releases\">BonView のリリース</a>に同梱しているほか、<a href=\"https://ffmpeg.org/releases/\">ffmpeg.org</a> から入手できます。</p>"
 else
   echo "note: FFmpeg ($FFMPEG_PREFIX) is not @rpath-linked; the app uses it from that location" >&2

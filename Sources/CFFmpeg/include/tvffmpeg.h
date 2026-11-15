@@ -45,7 +45,12 @@ enum {
 
 /// Create a decoder for the given TS stream_type. Returns NULL if unsupported.
 /// `useHardware`: try VideoToolbox for H.264/HEVC. `deinterlace`: a TV_DEINTERLACE_* mode.
-TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace);
+/// `gpuDeinterlace`: deinterlace with Metal (yadif_videotoolbox) when the bundled FFmpeg has it;
+/// falls back to bwdif on the CPU when the Metal graph can't be set up.
+TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace, int gpuDeinterlace);
+
+/// Whether the loaded FFmpeg was built with Metal deinterlacing (hwupload + yadif_videotoolbox).
+int tv_gpu_deinterlace_available(void);
 void tv_decoder_destroy(TVDecoder *dec);
 
 void tv_decoder_set_video_callback(TVDecoder *dec, tv_video_callback cb, void *ctx);

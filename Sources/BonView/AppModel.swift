@@ -209,6 +209,9 @@ final class AppModel {
     var deinterlace = Preferences.deinterlaceMode {
         didSet { player.setDeinterlace(deinterlace); UserDefaults.standard.set(deinterlace.rawValue, forKey: "deinterlaceMode") }
     }
+    var gpuDeinterlace = Preferences.bool("gpuDeinterlace", default: true) {
+        didSet { player.setGPUDeinterlace(gpuDeinterlace); UserDefaults.standard.set(gpuDeinterlace, forKey: "gpuDeinterlace") }
+    }
     var showCaptions = Preferences.bool("showCaptions", default: true) {
         didSet { UserDefaults.standard.set(showCaptions, forKey: "showCaptions") }
     }
@@ -246,6 +249,7 @@ final class AppModel {
         player.presenter.volume = Float(volume)
         player.setHardwareDecoding(hardwareDecoding)
         player.setDeinterlace(deinterlace)
+        player.setGPUDeinterlace(gpuDeinterlace)
 
         player.onServicesChanged = { [weak self] in self?.services = $0 }
         player.onSelectionChanged = { [weak self] sel in

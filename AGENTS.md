@@ -21,7 +21,8 @@ Scope decisions (keep them unless the maintainer says otherwise):
 ## Commands
 
 ```bash
-scripts/build_ffmpeg.sh        # bundled LGPL FFmpeg → build/ffmpeg (once; bundle.sh runs it too)
+scripts/build_ffmpeg.sh        # bundled LGPL FFmpeg → build/ffmpeg (once; bundle.sh runs it too); Metal deinterlacing
+                               # needs `xcodebuild -downloadComponent MetalToolchain`, applies scripts/ffmpeg-patches/
 swift build                    # all targets (FFmpeg from build/ffmpeg; override with FFMPEG_PREFIX)
 swift test                     # unit + integration tests; decode/scan tests need the ffmpeg CLI (FFMPEG_CLI=…)
 scripts/bundle.sh              # build/BonView.app (release, ad-hoc signed, FFmpeg in Contents/Frameworks)
@@ -42,7 +43,7 @@ When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh
 |---|---|
 | `Sources/BonDriver` | `BonDriver` protocol (IBonDriver1–3 in Swift, push-style `tsHandler`). `ProxyClient` + `ProxyProtocol` (BdpPacket: 8-byte header, big-endian body length, UTF-16LE wide strings; header byte 2 bit0 = B25 request). `TunnelClient` (little-endian 16-byte commands, `Crea`/`Conn` handshake, `GTsS` polling, reconnect with same sequence number). `Socket.swift` is a small blocking BSD-socket wrapper. |
 | `Sources/TSCore` | Packet splitter with resync, section assembler + CRC32, PAT/PMT/SDT/EIT p/f/TOT, PES, ARIB STD-B24 8-unit strings, `EPG.swift` (`EPGStore`: events per service, overlapping events replaced, extended items merged; `EITScheduleProgress`; thread-safe `EPGCollector` that skips sections already seen with the same CRC), captions (`Caption.swift`: data group/unit parsing, `CaptionScreen` layout engine → `CaptionFrame` glyphs in plane dots, CLUT, DRCS; vertical writing / flashing / TIME not modelled), `TSDemuxer`. Not thread-safe: drive from one queue. |
-| `Sources/CFFmpeg` | C wrapper (`tvffmpeg.h`) so Swift never touches FFmpeg structs. Parser → decoder → (bwdif for MPEG-2) → NV12 `CVPixelBuffer`; audio → swresample float stereo. The FFmpeg dylibs are **weak-linked** (`-weak-l…` in `Package.swift`); `tv_ffmpeg_missing_libraries()` / `FFmpegAvailability` report missing ones and `BonView/FFmpegMissingAlert` shows install steps and quits at launch. Never call into `tvffmpeg.h` before that check. |
+| `Sources/CFFmpeg` | C wrapper (`tvffmpeg.h`) so Swift never touches FFmpeg structs. Parser → decoder → (MPEG-2: `format=nv12,hwupload,yadif_videotoolbox` on Metal, else bwdif on the CPU; a Metal graph that fails is not retried for that decoder) → NV12 `CVPixelBuffer`; audio → swresample float stereo. The FFmpeg dylibs are **weak-linked** (`-weak-l…` in `Package.swift`); `tv_ffmpeg_missing_libraries()` / `FFmpegAvailability` report missing ones and `BonView/FFmpegMissingAlert` shows install steps and quits at launch. Never call into `tvffmpeg.h` before that check. |
 | `Sources/MediaCore` | `TSPlayer` (serial queue pipeline, PTS unwrapping, status), `AVPresenter` (`AVSampleBufferRenderSynchronizer`, anchors on first audio PTS − 0.4 s, re-anchors on underrun / > 2.5 s buffered; `currentFrame()` via `FrameHistory` for screenshots), `FrameSnapshot` (pixel buffer → display-size `CGImage`, PNG/JPEG). The app composites captions with `ImageRenderer` in `BonView/Screenshot.swift`. |
 | `Sources/ChannelScan` | `EPGGrabber`: walks scanned channels on its own `BonDriver`, feeding an `EPGCollector`, moving on when every visible service's basic schedule is complete (`EITScheduleProgress`: all segments of tables 0x50–0x57 / 0x60–0x67 up to last_table_id), on stall (20 s without a new section) or after 180 s; channels whose services are already complete are skipped (BS/CS carry the network's schedule on every TS). `ChannelScanner`: tunes each channel, waits for PAT + SDT names + NIT (or gives up after ~1.5 s without PAT and without signal). `ScannedChannel.threeDigitNumber` (remote key × 10 + (SID & 7) + 1; BS/CS: SID) and `duplicateNameServiceIDs` (sub-channels auto-hidden on first scan). |
 | `Sources/BonView` | SwiftUI app. `ProgramGuide.swift` (background EPG grab on a second connection with `channelLock = 0`, passive `EPGCollector` on the viewing stream, tuner-sharing guard, JSON persistence) and `ProgramGuideView` (番組表 window, broadcast day 04:00–28:00 JST). `AppModel` (@Observable, main-thread state; all BonDriver calls on `driverQueue`), `ServerProfile`/`Preferences` (UserDefaults), views. |
@@ -77,12 +78,15 @@ When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh
   `BonView/CaptionPlaneView` renders frames (Canvas); `scripts/make_demo_ts.py --captions` exercises it.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
   `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
-  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `epgLastGrab.<uuid>`, `deinterlaceMode` (`DeinterlaceMode` raw value; falls back to the older `deinterlace` bool).
+  (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `epgLastGrab.<uuid>`, `deinterlaceMode` (`DeinterlaceMode` raw value; falls back to the older `deinterlace` bool), `gpuDeinterlace`.
   Programme guide data is not in UserDefaults: `~/Library/Application Support/BonView/EPG/<uuid>.json` (`EPGStore` Codable, tagged with `ARIBString.decoderRevision`; bump it when decoded text changes so stale files are dropped and re-grabbed). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.
 - **Anything that changes `AppModel.epg` or `broadcastTime` re-renders the whole 番組表 grid and channel list**
   (Japanese line breaking is expensive). Guide data goes through `queueEPG` / `publishEPG` (merged at most every
   10 s); views that only need the minute use `programClock`, not `broadcastTime`.
+- **FFmpeg 9.0.2's `yadif_videotoolbox` over-releases autoreleased Metal objects** and crashes when the
+  caller's autorelease pool drains (the ffmpeg CLI hides it). `scripts/ffmpeg-patches/` carries the upstream fix;
+  drop the patch when bumping to a release that contains it. Patches ship with each release (LGPL).
 - Wire-format details are documented at the top of `ProxyProtocol.swift` and `TunnelClient.swift`;
   update those comments together with the code.
 

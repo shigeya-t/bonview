@@ -21,6 +21,8 @@ cd "$(dirname "$0")/.."
 
 [[ -z "${FFMPEG_PREFIX:-}" ]] || { echo "unset FFMPEG_PREFIX: releases must bundle scripts/build_ffmpeg.sh's FFmpeg" >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || echo "warning: the working tree has uncommitted changes" >&2
+xcrun -sdk macosx metal -v >/dev/null 2>&1 \
+  || { echo "releases need GPU deinterlacing: xcodebuild -downloadComponent MetalToolchain" >&2; exit 1; }
 
 if [[ -z "${SIGN_IDENTITY:-}" ]]; then
   SIGN_IDENTITY=$(security find-identity -v -p codesigning \
@@ -105,6 +107,7 @@ PLIST
 fi
 codesign --verify --deep --strict "$OUT/BonView.app"
 FFV=$(<build/ffmpeg/.version)
+[[ "$(cat build/ffmpeg/.features 2>/dev/null)" == metal ]] || { echo "the bundled FFmpeg lacks Metal deinterlacing" >&2; exit 1; }
 [[ -d "$OUT/BonView.app/Contents/Frameworks" ]] || { echo "FFmpeg was not bundled" >&2; exit 1; }
 
 ZIP="BonView-$VERSION-macOS-$ARCH.zip"
@@ -126,12 +129,24 @@ fi
 ditto -c -k --keepParent "$OUT/BonView.app" "$OUT/$ZIP"
 rm -rf "$OUT/BonView.app"
 cp "build/ffmpeg-src/ffmpeg-$FFV.tar.xz" "$OUT/"
+PATCHES=(scripts/ffmpeg-patches/*.patch(N))
+PATCH_FILES=()
+for patch in "${PATCHES[@]}"; do
+  cp "$patch" "$OUT/ffmpeg-${patch:t}"
+  PATCH_FILES+=("ffmpeg-${patch:t}")
+done
+if (( ${#PATCH_FILES} )); then
+  SOURCE_NOTE="ffmpeg-$FFV.tar.xz in this release (also at https://ffmpeg.org/releases/), with these
+  upstream FFmpeg fixes applied, also in this release: ${PATCH_FILES[*]}"
+else
+  SOURCE_NOTE="ffmpeg-$FFV.tar.xz in this release (unmodified; also at https://ffmpeg.org/releases/)."
+fi
 
 cat > "$OUT/FFmpeg-SOURCE.txt" <<EOF
 BonView $VERSION (commit $COMMIT) bundles FFmpeg $FFV as dynamic libraries in
 BonView.app/Contents/Frameworks, used under the GNU Lesser General Public License 2.1 or later.
 
-- Source: ffmpeg-$FFV.tar.xz in this release (unmodified; also at https://ffmpeg.org/releases/).
+- Source: $SOURCE_NOTE
 - Build settings: scripts/build_ffmpeg.sh in the BonView source at this release's tag
   (https://github.com/shigeya-t/bonview).
 - The libraries may be replaced with your own build of the same major versions; re-sign the app
@@ -139,7 +154,7 @@ BonView.app/Contents/Frameworks, used under the GNU Lesser General Public Licens
 - License text: BonView.app/Contents/Resources/Licenses/FFmpeg/COPYING.LGPLv2.1
 EOF
 
-(cd "$OUT" && shasum -a 256 "$ZIP" "ffmpeg-$FFV.tar.xz" FFmpeg-SOURCE.txt > SHA256SUMS.txt)
+(cd "$OUT" && shasum -a 256 "$ZIP" "ffmpeg-$FFV.tar.xz" "${PATCH_FILES[@]}" FFmpeg-SOURCE.txt > SHA256SUMS.txt)
 ls -l "$OUT"
 echo
 if [[ "$SIGN_IDENTITY" == "-" ]]; then echo "Signature: ad-hoc (not for distribution)"

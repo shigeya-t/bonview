@@ -10,6 +10,9 @@ public enum DeinterlaceMode: String, CaseIterable, Sendable {
     /// One frame per field (59.94p): smoothest motion.
     case fieldRate
 
+    /// The bundled FFmpeg can deinterlace with Metal (yadif_videotoolbox).
+    public static var gpuAvailable: Bool { tv_gpu_deinterlace_available() != 0 }
+
     var cValue: Int32 {
         switch self {
         case .off: Int32(TV_DEINTERLACE_OFF)
@@ -30,8 +33,8 @@ final class MediaDecoder {
     /// Interleaved float32 stereo PCM: samples, frames, channels, sampleRate, PTS.
     var onAudio: ((UnsafePointer<Float>, Int, Int, Int, Int64?) -> Void)?
 
-    init?(streamType: UInt8, pid: UInt16, hardware: Bool, deinterlace: DeinterlaceMode) {
-        guard let d = tv_decoder_create(Int32(streamType), hardware ? 1 : 0, deinterlace.cValue) else { return nil }
+    init?(streamType: UInt8, pid: UInt16, hardware: Bool, deinterlace: DeinterlaceMode, gpuDeinterlace: Bool = false) {
+        guard let d = tv_decoder_create(Int32(streamType), hardware ? 1 : 0, deinterlace.cValue, gpuDeinterlace ? 1 : 0) else { return nil }
         raw = d
         self.streamType = streamType
         self.pid = pid

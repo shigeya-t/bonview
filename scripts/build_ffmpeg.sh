@@ -4,7 +4,12 @@
 #   FORCE=1 scripts/build_ffmpeg.sh    rebuild even if build/ffmpeg exists
 #
 # Only what Sources/CFFmpeg/tvffmpeg.c uses is enabled: the MPEG-2 / H.264 / HEVC / AAC (ADTS, LATM)
-# decoders and parsers, VideoToolbox, the buffer / buffersink / bwdif filters, swresample and swscale.
+# decoders and parsers, VideoToolbox, the buffer / buffersink / bwdif filters, swresample and swscale,
+# plus Metal deinterlacing (hwupload + yadif_videotoolbox) when Xcode's Metal Toolchain is installed
+# (xcodebuild -downloadComponent MetalToolchain). Without it the app deinterlaces on the CPU only.
+# build/ffmpeg/.features records which (metal / nometal); package_release.sh requires metal.
+# scripts/ffmpeg-patches/*.patch (upstream fixes not yet in a release) are applied to the source;
+# package_release.sh ships them next to the source tarball.
 # --disable-autodetect keeps it from picking up Homebrew libraries, so the result depends only on
 # system frameworks. Dylibs get `@rpath/…` install names; bundle.sh copies them to Contents/Frameworks.
 # No GPL or nonfree parts are enabled, so the libraries stay LGPL 2.1+.
@@ -19,8 +24,26 @@ SRC_DIR=build/ffmpeg-src
 PREFIX="$PWD/build/ffmpeg"
 TARBALL="$SRC_DIR/ffmpeg-$FFMPEG_VERSION.tar.xz"
 
-if [[ -f "$PREFIX/.version" && "$(<"$PREFIX/.version")" == "$FFMPEG_VERSION" && -z "${FORCE:-}" ]]; then
-  echo "$PREFIX (FFmpeg $FFMPEG_VERSION, already built; FORCE=1 to rebuild)"
+# The Metal shader of yadif_videotoolbox is compiled at build time.
+if xcrun -sdk macosx metal -v >/dev/null 2>&1; then
+  FEATURES=metal
+  METAL=(--enable-metal)
+  FILTERS=buffer,buffersink,bwdif,format,scale,hwupload,yadif_videotoolbox
+else
+  FEATURES=nometal
+  METAL=()
+  FILTERS=buffer,buffersink,bwdif,format,scale
+  echo "warning: Metal Toolchain not found; building without GPU deinterlacing" >&2
+  echo "         (install it with: xcodebuild -downloadComponent MetalToolchain)" >&2
+fi
+
+PATCHES=(scripts/ffmpeg-patches/*.patch(N))
+PATCHES_ID=$( (( ${#PATCHES} )) && cat "${PATCHES[@]}" | shasum -a 256 | cut -c1-16 || echo none)
+
+if [[ -f "$PREFIX/.version" && "$(<"$PREFIX/.version")" == "$FFMPEG_VERSION" \
+      && "$(cat "$PREFIX/.features" 2>/dev/null)" == "$FEATURES" \
+      && "$(cat "$PREFIX/.patches" 2>/dev/null)" == "$PATCHES_ID" && -z "${FORCE:-}" ]]; then
+  echo "$PREFIX (FFmpeg $FFMPEG_VERSION, $FEATURES, already built; FORCE=1 to rebuild)"
   exit 0
 fi
 
@@ -35,6 +58,9 @@ echo "$FFMPEG_SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || { echo "check
 WORK="$SRC_DIR/ffmpeg-$FFMPEG_VERSION"
 rm -rf "$WORK" "$PREFIX"
 tar xJf "$TARBALL" -C "$SRC_DIR"
+for patch in "${PATCHES[@]}"; do
+  patch -d "$WORK" -p1 --forward --quiet < "$patch" || { echo "failed to apply $patch" >&2; exit 1; }
+done
 
 ASM=()
 [[ "$(uname -m)" == x86_64 ]] && ! command -v nasm >/dev/null && ASM=(--disable-x86asm)
@@ -53,7 +79,8 @@ ASM=()
     --enable-decoder=mpeg2video,h264,hevc,aac,aac_latm \
     --enable-parser=mpegvideo,h264,hevc,aac,aac_latm \
     --enable-hwaccel=h264_videotoolbox,hevc_videotoolbox \
-    --enable-filter=buffer,buffersink,bwdif,format,scale \
+    --enable-filter="$FILTERS" \
+    "${METAL[@]}" \
     --extra-cflags="-mmacosx-version-min=$MIN_MACOS" \
     --extra-ldflags="-mmacosx-version-min=$MIN_MACOS" \
     "${ASM[@]}" \
@@ -66,5 +93,7 @@ ASM=()
 mkdir -p "$PREFIX/share/licenses"
 cp "$WORK/COPYING.LGPLv2.1" "$WORK/LICENSE.md" "$PREFIX/share/licenses/"
 echo "$FFMPEG_VERSION" > "$PREFIX/.version"
+echo "$FEATURES" > "$PREFIX/.features"
+echo "$PATCHES_ID" > "$PREFIX/.patches"
 rm -rf "$WORK"
-echo "$PREFIX (FFmpeg $FFMPEG_VERSION)"
+echo "$PREFIX (FFmpeg $FFMPEG_VERSION, $FEATURES)"

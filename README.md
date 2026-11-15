@@ -57,7 +57,7 @@ Mac 側にドライバーやカードリーダーは要りません。
   - Windows 用の `BonDriver_Proxy.ini`、Linux 用の `BonDriver_Proxy.so.conf`、BonDriver_Tunnel 用の `BonDriver_*.ini` をそのまま読み込めます。
 - **ネイティブのデコードと表示**
   - H.264 / HEVC は VideoToolbox でハードウェアデコードします。
-  - MPEG-2 は FFmpeg でデコードし、bwdif でインターレースを解除して 59.94p で表示します。CPU 負荷を下げたいときは設定で 29.97p に切り替えられます。
+  - MPEG-2 は FFmpeg でデコードし、GPU (Metal) の yadif でインターレースを解除して 59.94p で表示します。Metal が使えないときは CPU の bwdif を使います。CPU 負荷を下げたいときは設定で 29.97p に切り替えられます。
   - 映像と音声は `AVSampleBufferRenderSynchronizer` で同期させます。ネットワークの揺らぎは自動で吸収します。
 - **放送の情報を表示**
   - PAT / PMT / SDT / EIT（現在と次の番組）/ TOT を解析し、局名・番組名・放送時刻を表示します。文字は ARIB STD-B24 の 8 単位符号に対応しています。
@@ -107,7 +107,7 @@ open build/BonView.app
 ```
 
 - `/Applications` に置きたい場合は `build/BonView.app` をコピーしてください。
-- `scripts/bundle.sh` は、まず `scripts/build_ffmpeg.sh` で FFmpeg のソースを [ffmpeg.org](https://ffmpeg.org/releases/) からダウンロード（SHA-256 を照合）し、BonView に必要なデコーダー（MPEG-2 / H.264 / HEVC / AAC）とフィルターだけを有効にして `build/ffmpeg` にビルドします（初回のみ、1 分ほど）。できた dylib は `BonView.app/Contents/Frameworks` にコピーします。
+- `scripts/bundle.sh` は、まず `scripts/build_ffmpeg.sh` で FFmpeg のソースを [ffmpeg.org](https://ffmpeg.org/releases/) からダウンロード（SHA-256 を照合）し、BonView に必要なデコーダー（MPEG-2 / H.264 / HEVC / AAC）とフィルターだけを有効にして `build/ffmpeg` にビルドします（初回のみ、1 分ほど）。できた dylib は `BonView.app/Contents/Frameworks` にコピーします。GPU でのインターレース解除（yadif_videotoolbox）には Xcode の Metal Toolchain が必要です（`xcodebuild -downloadComponent MetalToolchain` で一度だけインストール）。入っていなければ GPU 版なしでビルドし、CPU の bwdif を使います。
 - 別の FFmpeg を使う場合は、`FFMPEG_PREFIX=$(brew --prefix ffmpeg) scripts/bundle.sh` のように指定します。この場合 FFmpeg は同梱せず、その場所から読み込みます。
 - バンドル ID（既定は `io.github.shigeya-t.BonView`）は `BUNDLE_ID=io.github.yourname.BonView scripts/bundle.sh` で変えられます。設定（UserDefaults）はバンドル ID ごとに別になります。
 - 配布用には `scripts/package_release.sh` を使います。`build/release/` に、アプリの zip、同梱した FFmpeg のソース（`ffmpeg-<版>.tar.xz`）、その説明（`FFmpeg-SOURCE.txt`）、`SHA256SUMS.txt` を作ります。LGPL の条件を満たすため、GitHub のリリースにはこれらをすべて添付してください（アップロードはしません。最後に `gh release create` のコマンドを表示します）。
@@ -219,7 +219,7 @@ C:\DTV\
 
 「読み込み…」から既存の `BonDriver_Proxy.ini` / `.so.conf` / BonDriver_Tunnel 用の ini を取り込めます。どの方式かは自動で判別します。
 
-再生タブでは、ハードウェアデコードの有効 / 無効と、インターレース解除 (オフ / 29.97p / 59.94p) を切り替えられます。29.97p は 59.94p より動きの滑らかさが落ちますが、CPU 使用率が下がります。
+再生タブでは、ハードウェアデコードの有効 / 無効と、インターレース解除 (オフ / 29.97p / 59.94p) を切り替えられます。29.97p は 59.94p より動きの滑らかさが落ちますが、CPU 使用率が下がります。「インターレース解除に GPU を使う」をオフにすると、GPU (Metal) の yadif ではなく CPU の bwdif で解除します。
 
 ## 使い方
 
@@ -372,6 +372,6 @@ BonView のソースコードは [MIT License](LICENSE) で公開しています
 
 - BonDriverProxy のプロトコル実装は [BonDriverProxy_Linux](https://github.com/u-n-k-n-o-w-n/BonDriverProxy_Linux)（MIT License）を、BonDriverTunnel のプロトコル実装は [BonDriverTunnel](https://github.com/xtne6f/BonDriverTunnel)（MIT License）を参考に、Swift で書き直したものです。
 - ARIB 外字（追加記号・追加漢字）の Unicode 対応表は [libaribcaption](https://github.com/xqq/libaribcaption)（ISC 形式のライセンス）のものを使っています（`Sources/TSCore/ARIBGaiji.swift` に著作権表示を記載）。
-- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。改変していないソースは、各リリースに添付しているほか、[ffmpeg.org](https://ffmpeg.org/releases/) からも入手できます。
+- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。ソースは各リリースに添付しています（[ffmpeg.org](https://ffmpeg.org/releases/) からも入手できます）。まだリリースに含まれていない FFmpeg 本家の修正を `scripts/ffmpeg-patches/` から当てており、そのパッチもリリースに添付しています。
 - アプリの「BonView について」に、BonView・FFmpeg・libaribcaption のクレジットを表示します（`Resources/Credits.html`）。ライセンス文は `BonView.app/Contents/Resources/Licenses/` に入っています。
 - `FFMPEG_PREFIX` で Homebrew の FFmpeg（GPL 構成）を使ってビルドしたバイナリを配布する場合は、GPL の条件に従う必要があります。

@@ -54,6 +54,10 @@ struct TVDecoder {
     // Video
     int wantHW, hwActive;
     int deinterlace; // TV_DEINTERLACE_*
+    int wantGPUDeinterlace;
+    int gpuFailed;          // the Metal graph could not be built: stay on bwdif
+    int gpuGraph;           // the current graph is the Metal one
+    AVBufferRef *vtDevice;  // for hwupload
     AVFilterGraph *graph;
     AVFilterContext *src, *sink;
     int gW, gH, gFmt;
@@ -133,11 +137,16 @@ static int open_codec(TVDecoder *d) {
     return 0;
 }
 
-TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace) {
+int tv_gpu_deinterlace_available(void) {
+    return avfilter_get_by_name("hwupload") && avfilter_get_by_name("yadif_videotoolbox");
+}
+
+TVDecoder *tv_decoder_create(int streamType, int useHardware, int deinterlace, int gpuDeinterlace) {
     TVDecoder *d = (TVDecoder *)calloc(1, sizeof(TVDecoder));
     if (!d) return NULL;
     d->streamType = streamType;
     d->wantHW = useHardware;
+    d->wantGPUDeinterlace = gpuDeinterlace && tv_gpu_deinterlace_available();
     d->deinterlace = (deinterlace == TV_DEINTERLACE_FIELD_RATE || deinterlace == TV_DEINTERLACE_FRAME_RATE) ? deinterlace : TV_DEINTERLACE_OFF;
     d->nextAudioPts = TV_NOPTS;
     d->pkt = av_packet_alloc();
@@ -155,11 +164,13 @@ static void free_graph(TVDecoder *d) {
     d->src = d->sink = NULL;
     d->gW = d->gH = 0;
     d->gFmt = -1;
+    d->gpuGraph = 0;
 }
 
 void tv_decoder_destroy(TVDecoder *d) {
     if (!d) return;
     free_graph(d);
+    av_buffer_unref(&d->vtDevice);
     if (d->sws) sws_freeContext(d->sws);
     if (d->pool) CVPixelBufferPoolRelease(d->pool);
     if (d->swr) swr_free(&d->swr);
@@ -252,35 +263,41 @@ static void emit_software_frame(TVDecoder *d, AVFrame *f, int64_t pts) {
     CVPixelBufferRelease(pb);
 }
 
-static int build_graph(TVDecoder *d, const AVFrame *f) {
+static int build_graph_spec(TVDecoder *d, const AVFrame *f, const char *spec, AVBufferRef *device) {
     free_graph(d);
     d->graph = avfilter_graph_alloc();
     if (!d->graph) return AVERROR(ENOMEM);
     AVRational sar = f->sample_aspect_ratio;
     if (sar.num <= 0 || sar.den <= 0) sar = (AVRational){1, 1};
     char args[256];
-    snprintf(args, sizeof args, "video_size=%dx%d:pix_fmt=%d:time_base=1/90000:pixel_aspect=%d/%d",
-             f->width, f->height, f->format, sar.num, sar.den);
+    snprintf(args, sizeof args, "video_size=%dx%d:pix_fmt=%d:time_base=1/90000:pixel_aspect=%d/%d:colorspace=%d:range=%d",
+             f->width, f->height, f->format, sar.num, sar.den, (int)f->colorspace, (int)f->color_range);
     int ret = avfilter_graph_create_filter(&d->src, avfilter_get_by_name("buffer"), "in", args, NULL, d->graph);
     if (ret < 0) goto fail;
     ret = avfilter_graph_create_filter(&d->sink, avfilter_get_by_name("buffersink"), "out", NULL, NULL, d->graph);
     if (ret < 0) goto fail;
-    AVFilterInOut *outputs = avfilter_inout_alloc();
-    AVFilterInOut *inputs = avfilter_inout_alloc();
-    outputs->name = av_strdup("in");
-    outputs->filter_ctx = d->src;
-    outputs->pad_idx = 0;
-    outputs->next = NULL;
-    inputs->name = av_strdup("out");
-    inputs->filter_ctx = d->sink;
-    inputs->pad_idx = 0;
-    inputs->next = NULL;
-    const char *spec = d->deinterlace == TV_DEINTERLACE_FRAME_RATE
-        ? "bwdif=mode=send_frame:parity=auto:deint=interlaced"
-        : "bwdif=mode=send_field:parity=auto:deint=interlaced";
-    ret = avfilter_graph_parse_ptr(d->graph, spec, &inputs, &outputs, NULL);
+    // Parse in steps so the device can be attached before the filters are initialised
+    // (hwupload checks for it in init).
+    AVFilterGraphSegment *seg = NULL;
+    AVFilterInOut *inputs = NULL, *outputs = NULL;
+    ret = avfilter_graph_segment_parse(d->graph, spec, 0, &seg);
+    if (ret >= 0) ret = avfilter_graph_segment_create_filters(seg, 0);
+    if (ret >= 0 && device) {
+        for (unsigned i = 0; i < d->graph->nb_filters; i++) {
+            AVFilterContext *fc = d->graph->filters[i];
+            if (!fc->hw_device_ctx && !(fc->hw_device_ctx = av_buffer_ref(device))) { ret = AVERROR(ENOMEM); break; }
+        }
+    }
+    if (ret >= 0) ret = avfilter_graph_segment_apply_opts(seg, 0);
+    if (ret >= 0) ret = avfilter_graph_segment_init(seg, 0);
+    if (ret >= 0) ret = avfilter_graph_segment_link(seg, 0, &inputs, &outputs);
+    // A linear chain: one open input and one open output.
+    if (ret >= 0 && (!inputs || inputs->next || !outputs || outputs->next)) ret = AVERROR(EINVAL);
+    if (ret >= 0) ret = avfilter_link(d->src, 0, inputs->filter_ctx, inputs->pad_idx);
+    if (ret >= 0) ret = avfilter_link(outputs->filter_ctx, outputs->pad_idx, d->sink, 0);
     avfilter_inout_free(&inputs);
     avfilter_inout_free(&outputs);
+    avfilter_graph_segment_free(&seg);
     if (ret < 0) goto fail;
     ret = avfilter_graph_config(d->graph, NULL);
     if (ret < 0) goto fail;
@@ -291,6 +308,43 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
 fail:
     free_graph(d);
     return ret;
+}
+
+/// Metal (yadif_videotoolbox, output: VideoToolbox NV12 frames) when wanted and possible,
+/// else bwdif on the CPU. A failed Metal graph is not retried for this decoder.
+static int build_graph(TVDecoder *d, const AVFrame *f) {
+    int frameRate = d->deinterlace == TV_DEINTERLACE_FRAME_RATE;
+    if (d->wantGPUDeinterlace && !d->gpuFailed) {
+        if (!d->vtDevice && av_hwdevice_ctx_create(&d->vtDevice, AV_HWDEVICE_TYPE_VIDEOTOOLBOX, NULL, NULL, 0) < 0)
+            d->vtDevice = NULL;
+        const char *spec = frameRate
+            ? "format=nv12,hwupload,yadif_videotoolbox=mode=send_frame:parity=auto:deint=interlaced"
+            : "format=nv12,hwupload,yadif_videotoolbox=mode=send_field:parity=auto:deint=interlaced";
+        if (d->vtDevice && build_graph_spec(d, f, spec, d->vtDevice) == 0) {
+            d->gpuGraph = 1;
+            snprintf(d->desc, sizeof d->desc, "%s (software) + yadif (Metal)", d->codec->name);
+            return 0;
+        }
+        d->gpuFailed = 1;
+        av_buffer_unref(&d->vtDevice);
+    }
+    int ret = build_graph_spec(d, f, frameRate ? "bwdif=mode=send_frame:parity=auto:deint=interlaced"
+                                               : "bwdif=mode=send_field:parity=auto:deint=interlaced", NULL);
+    if (ret == 0) snprintf(d->desc, sizeof d->desc, "%s (software) + bwdif", d->codec->name);
+    return ret;
+}
+
+/// A frame from the filter graph: a VideoToolbox pixel buffer (Metal graph) or a software frame.
+static void emit_filtered_frame(TVDecoder *d, AVFrame *f, int64_t pts) {
+    if (f->format != AV_PIX_FMT_VIDEOTOOLBOX) {
+        emit_software_frame(d, f, pts);
+        return;
+    }
+    CVPixelBufferRef pb = (CVPixelBufferRef)f->data[3];
+    if (!pb || !d->vcb) return;
+    attach_color(pb, f);
+    attach_par(pb, f->sample_aspect_ratio);
+    d->vcb(d->vctx, pb, pts, f->sample_aspect_ratio.num, f->sample_aspect_ratio.den);
 }
 
 static void handle_video(TVDecoder *d, AVFrame *f) {
@@ -313,10 +367,17 @@ static void handle_video(TVDecoder *d, AVFrame *f) {
         }
     }
     f->pts = f->best_effort_timestamp;
-    if (av_buffersrc_add_frame_flags(d->src, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) return;
+    if (av_buffersrc_add_frame_flags(d->src, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
+        if (d->gpuGraph) {
+            // The Metal path failed at run time (e.g. upload): fall back to bwdif from now on.
+            d->gpuFailed = 1;
+            free_graph(d);
+        }
+        return;
+    }
     AVRational tb = av_buffersink_get_time_base(d->sink);
     while (av_buffersink_get_frame(d->sink, d->filtFrame) >= 0) {
-        emit_software_frame(d, d->filtFrame, to90k(d->filtFrame->pts, tb));
+        emit_filtered_frame(d, d->filtFrame, to90k(d->filtFrame->pts, tb));
         av_frame_unref(d->filtFrame);
     }
 }

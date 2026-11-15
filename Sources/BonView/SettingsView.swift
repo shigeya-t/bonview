@@ -26,6 +26,11 @@ private struct PlaybackSettings: View {
                 Text("29.97p (CPU 負荷 小)").tag(DeinterlaceMode.frameRate)
                 Text("59.94p (なめらか)").tag(DeinterlaceMode.fieldRate)
             }
+            Toggle("インターレース解除に GPU を使う (Metal, yadif)", isOn: $model.gpuDeinterlace)
+                .disabled(model.deinterlace == .off || !DeinterlaceMode.gpuAvailable)
+                .help(DeinterlaceMode.gpuAvailable
+                      ? "オフにすると CPU の bwdif を使います。"
+                      : "この FFmpeg は Metal に対応していないため、CPU の bwdif を使います。")
             Section("スクリーンショット") {
                 LabeledContent("保存先") {
                     HStack {

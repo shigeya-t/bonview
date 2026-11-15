@@ -48,9 +48,11 @@ import TSCore
         var firstVideoPTS: Int64?
         var lastVideoPTS: Int64?
         var videoCodec = ""
+        var pixelFormat: OSType = 0
+        var matrix: String?
     }
 
-    static func decode(_ url: URL, hardware: Bool, deinterlace: DeinterlaceMode) throws -> Result {
+    static func decode(_ url: URL, hardware: Bool, deinterlace: DeinterlaceMode, gpu: Bool = false) throws -> Result {
         let data = try Data(contentsOf: url)
         let demux = TSDemuxer()
         var video: MediaDecoder?
@@ -59,7 +61,7 @@ import TSCore
         demux.onSelectionChanged = { sel in
             guard let sel else { return }
             if let v = sel.video {
-                video = MediaDecoder(streamType: v.streamType, pid: v.pid, hardware: hardware, deinterlace: deinterlace)
+                video = MediaDecoder(streamType: v.streamType, pid: v.pid, hardware: hardware, deinterlace: deinterlace, gpuDeinterlace: gpu)
                 video?.onVideo = { pb, pts in
                     r.frames += 1
                     r.size = CGSize(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
@@ -67,6 +69,8 @@ import TSCore
                         r.par = (d[kCVImageBufferPixelAspectRatioHorizontalSpacingKey as String] ?? 0,
                                  d[kCVImageBufferPixelAspectRatioVerticalSpacingKey as String] ?? 0)
                     }
+                    r.pixelFormat = CVPixelBufferGetPixelFormatType(pb)
+                    r.matrix = CVBufferCopyAttachment(pb, kCVImageBufferYCbCrMatrixKey, nil) as? String
                     if r.firstVideoPTS == nil { r.firstVideoPTS = pts }
                     r.lastVideoPTS = pts
                 }
@@ -100,6 +104,7 @@ import TSCore
             demux.feed(data.subdata(in: i..<(i + n)))
             i += n
         }
+        if let video { r.videoCodec = video.description } // names the deinterlacer once it ran
         return r
     }
 
@@ -140,6 +145,34 @@ import TSCore
             let fps = Double(r.frames - 1) / (Double(b - a) / 90000)
             #expect(abs(fps - 29.97) < 1, "fps \(fps)")
         }
+    }
+
+    static func interlacedMPEG2() throws -> URL {
+        try makeTS("mpeg2i-video", [
+            "-f", "lavfi", "-i", "testsrc2=size=1440x1080:rate=30000/1001", "-t", "3",
+            "-vf", "setsar=4/3,setfield=tff", "-c:v", "mpeg2video", "-b:v", "12M", "-flags", "+ilme+ildct",
+        ])
+    }
+
+    @Test(.enabled(if: ffmpeg != nil && DeinterlaceMode.gpuAvailable), arguments: [DeinterlaceMode.fieldRate, .frameRate])
+    func mpeg2DeinterlacedWithMetal(_ mode: DeinterlaceMode) throws {
+        let r = try Self.decode(try Self.interlacedMPEG2(), hardware: true, deinterlace: mode, gpu: true)
+        #expect(r.videoCodec.hasSuffix("+ yadif (Metal)"), "\(r.videoCodec)")
+        #expect(r.pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange)
+        #expect(r.size == CGSize(width: 1440, height: 1080))
+        #expect(r.par.map { $0.0 * 3 == $0.1 * 4 } == true, "PAR \(String(describing: r.par))")
+        #expect(r.matrix == (kCVImageBufferYCbCrMatrix_ITU_R_709_2 as String))
+        let expected = mode == .fieldRate ? 59.94 : 29.97
+        #expect(Double(r.frames) > expected * 3 * 0.8, "frames: \(r.frames)")
+        if let a = r.firstVideoPTS, let b = r.lastVideoPTS {
+            let fps = Double(r.frames - 1) / (Double(b - a) / 90000)
+            #expect(abs(fps - expected) < 1, "fps \(fps)")
+        }
+    }
+
+    @Test(.enabled(if: ffmpeg != nil)) func mpeg2CPUDeinterlaceWhenGPUOff() throws {
+        let r = try Self.decode(try Self.interlacedMPEG2(), hardware: true, deinterlace: .fieldRate, gpu: false)
+        #expect(r.videoCodec.hasSuffix("+ bwdif"), "\(r.videoCodec)")
     }
 
     @Test(.enabled(if: ffmpeg != nil)) func h264ViaVideoToolbox() throws {
