@@ -216,7 +216,9 @@ private struct ChannelPanel: View {
 }
 
 /// Truncated programme title that pops up the full title (with time and description) after the
-/// pointer rests on it. `.help` tooltips don't show reliably inside the selectable channel List.
+/// pointer rests on it. `.help` tooltips don't show reliably inside the selectable channel List, and
+/// SwiftUI's `.popover` is transient on macOS: its first outside click only closes it, so clicking
+/// the row would not tune. `HoverPopover` lets that click through to the List instead.
 private struct ProgramTitleLabel: View {
     let event: EventInfo
     @State private var hovering = false
@@ -238,22 +240,82 @@ private struct ProgramTitleLabel: View {
                     showPopover = false
                 }
             }
-            .popover(isPresented: $showPopover, arrowEdge: .leading) {
-                VStack(alignment: .leading, spacing: 4) {
-                    if event.start != nil {
-                        Text(EventFormat.timeRange(event)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    Text(event.title).font(.headline)
-                    if !event.text.isEmpty {
-                        Text(event.text).font(.callout).foregroundStyle(.secondary)
-                    }
-                }
-                // The popover inherits the label's environment; undo its single-line truncation.
-                .lineLimit(nil)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(width: 300, alignment: .leading)
-                .padding(10)
+            .background(HoverPopover(isPresented: $showPopover) { detail })
+    }
+
+    private var detail: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if event.start != nil {
+                Text(EventFormat.timeRange(event)).font(.caption).monospacedDigit().foregroundStyle(.secondary)
             }
+            Text(event.title).font(.headline)
+            if !event.text.isEmpty {
+                Text(event.text).font(.callout).foregroundStyle(.secondary)
+            }
+        }
+        .lineLimit(nil)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 300, alignment: .leading)
+        .padding(10)
+    }
+}
+
+/// Informational popover anchored on the view it backs. Unlike SwiftUI's `.popover` it does not
+/// swallow clicks: it uses `.applicationDefined` behaviour and closes itself on any mouse-down in
+/// the app, letting the event continue to whatever was clicked.
+private struct HoverPopover<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    @ViewBuilder var content: () -> Content
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        let c = context.coordinator
+        c.onClose = { isPresented = false }
+        if isPresented {
+            c.show(AnyView(content()), from: view)
+        } else {
+            c.close()
+        }
+    }
+
+    static func dismantleNSView(_ view: NSView, coordinator: Coordinator) {
+        coordinator.close()
+    }
+
+    @MainActor final class Coordinator {
+        var onClose: (() -> Void)?
+        private var popover: NSPopover?
+        private var monitor: Any?
+
+        func show(_ content: AnyView, from view: NSView) {
+            guard popover == nil, view.window != nil else { return }
+            let p = NSPopover()
+            p.behavior = .applicationDefined
+            p.animates = false
+            let host = NSHostingController(rootView: content)
+            // Size the popover from the content's height at its fixed width up front; letting
+            // preferredContentSize settle later leaves the popover at a single-line height.
+            host.sizingOptions = []
+            p.contentViewController = host
+            p.contentSize = host.sizeThatFits(in: NSSize(width: 400, height: 10_000))
+            p.show(relativeTo: view.bounds, of: view, preferredEdge: .minX)
+            popover = p
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] event in
+                self?.close()
+                self?.onClose?()
+                return event
+            }
+        }
+
+        func close() {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            popover?.close()
+            popover = nil
+        }
     }
 }
 
