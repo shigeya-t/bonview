@@ -23,13 +23,20 @@ Mac 側にドライバーやカードリーダーは要りません。
 </p>
 <p align="center"><sub>※ 画面は付属スクリプトで生成したテスト映像（架空の局・番組）をモックサーバーから配信したものです。</sub></p>
 
-```
-┌──────────── Windows / Linux ────────────┐            ┌──────── Mac ────────┐
-│ チューナー → BonDriver_xxx.dll            │            │                     │
-│               ↓                          │  TCP/LAN   │  BonView            │
-│ BonDriverProxyEx.exe  (1192/tcp)  ───────┼──────────▶ │   TS 分離 → デコード  │
-│   または BonDriverTunnel.exe (1193/tcp)    │            │   → 映像・音声の同期表示 │
-└──────────────────────────────────────────┘            └─────────────────────┘
+```mermaid
+flowchart LR
+  subgraph server["Windows / Linux"]
+    direction TB
+    tuner["チューナー"] --> bondriver["BonDriver_xxx.dll"]
+    bondriver --> proxy["BonDriverProxyEx.exe<br>（1192/tcp）"]
+    bondriver -.-> tunnel["または BonDriverTunnel.exe<br>（1193/tcp）"]
+  end
+  subgraph mac["Mac（BonView）"]
+    direction TB
+    demux["TS 分離"] --> decode["デコード"] --> present["映像・音声の同期表示"]
+  end
+  proxy -- "TCP/LAN" --> demux
+  tunnel -. "TCP/LAN" .-> demux
 ```
 
 ## 目次
