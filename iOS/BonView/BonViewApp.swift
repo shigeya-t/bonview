@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct BonViewApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
     /// Whether to reconnect when the app comes back to the foreground.
