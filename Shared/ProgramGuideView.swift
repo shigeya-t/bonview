@@ -16,6 +16,15 @@ struct ProgramGuideView: View {
     static let headerHeight: CGFloat = 40
     static let pointsPerMinute: CGFloat = 3
 
+    #if os(macOS)
+    private static let spacePlacement = ToolbarItemPlacement.navigation
+    private static let dayPlacement = ToolbarItemPlacement.automatic
+    #else
+    // iOS: the tuning space switch in the navigation bar, the day controls in the bottom bar.
+    private static let spacePlacement = ToolbarItemPlacement.principal
+    private static let dayPlacement = ToolbarItemPlacement.bottomBar
+    #endif
+
     static let jst = TimeZone(identifier: "Asia/Tokyo")!
     static var calendar: Calendar {
         var c = Calendar(identifier: .gregorian)
@@ -59,14 +68,14 @@ struct ProgramGuideView: View {
             GuideStatusBar()
         }
         .toolbar {
-            ToolbarItem(placement: .navigation) {
+            ToolbarItem(placement: Self.spacePlacement) {
                 Picker("チューニング空間", selection: Binding(get: { currentSpace ?? "" }, set: { spaceName = $0 })) {
                     ForEach(spaces, id: \.self) { Text($0).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
             }
-            ToolbarItemGroup {
+            ToolbarItemGroup(placement: Self.dayPlacement) {
                 Button { dayOffset = max(0, dayOffset - 1) } label: { Label("前の日", systemImage: "chevron.left") }
                     .disabled(dayOffset == 0)
                 Picker("日付", selection: $dayOffset) {
@@ -190,6 +199,7 @@ struct ProgramGuideView: View {
                     .onTapGesture { selected = id }
                     .popover(isPresented: Binding(get: { selected == id }, set: { if !$0 { selected = nil } }), arrowEdge: .trailing) {
                         EventDetail(event: ev, entry: e)
+                            .presentationCompactAdaptation(.popover)
                     }
                     .offset(y: y)
             }
@@ -296,8 +306,11 @@ private struct GuideStatusBar: View {
                     Text("番組表はまだ取得していません").foregroundStyle(.secondary)
                 }
                 Spacer()
+                #if os(macOS)
+                // iOS has this in the settings screen; the guide's bottom bar is too narrow.
                 Toggle("自動取得", isOn: $model.epgAutoGrab).toggleStyle(.checkbox)
                     .help("接続中、6時間ごとに番組表を取得します")
+                #endif
                 Button("番組表を取得") { model.startEPGGrab() }
                     .disabled(model.state != .connected || model.isScanning || model.scannedChannels.isEmpty)
                     .help("別の接続でチャンネルを切り替えながら全局の番組表を取得します (空きチューナーが必要です)")

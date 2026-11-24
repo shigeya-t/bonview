@@ -13,6 +13,10 @@
 #                         in an .xcarchive and exported with `xcodebuild -exportArchive -allowProvisioningUpdates`
 #                         (an Xcode account with the Admin or Account Holder role; no local certificate needed)
 #   otherwise             ad-hoc, with a warning (Gatekeeper then blocks the downloaded app)
+#   iCloud settings sync: with DEVELOPMENT_TEAM the app gets the iCloud key-value storage entitlement and the
+#     export fetches a Developer ID provisioning profile (the App ID needs the iCloud capability, which Xcode
+#     enables when it signs the iOS app). With SIGN_IDENTITY / the keychain, give ICLOUD_TEAM=<team ID> and
+#     PROVISIONING_PROFILE=<Developer ID profile with iCloud>. ICLOUD=0 builds without it.
 #   Notary credentials, required with Developer ID (NOTARIZE=0 skips notarization):
 #     NOTARY_PROFILE=name                         from `xcrun notarytool store-credentials name …`
 #     NOTARY_KEY=AuthKey_X.p8 NOTARY_KEY_ID=X NOTARY_ISSUER=uuid   App Store Connect API key (CI)
@@ -44,12 +48,22 @@ else
 fi
 export SIGN_IDENTITY
 
-VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" macOS/Resources/Info.plist)
 ARCH=$(uname -m)
 COMMIT=$(git rev-parse --short HEAD)
 OUT=build/release
 rm -rf "$OUT"
 mkdir -p "$OUT"
+
+if [[ "${ICLOUD:-1}" == 0 ]]; then
+  unset ICLOUD_TEAM PROVISIONING_PROFILE
+elif [[ -n "$CLOUD_TEAM" ]]; then
+  export ICLOUD_TEAM=$CLOUD_TEAM
+elif [[ -z "${ICLOUD_TEAM:-}" || -z "${PROVISIONING_PROFILE:-}" ]]; then
+  unset ICLOUD_TEAM PROVISIONING_PROFILE
+  echo "warning: no iCloud entitlement (set ICLOUD_TEAM and PROVISIONING_PROFILE); settings sync is off in this build" >&2
+fi
+if [[ -n "${ICLOUD_TEAM:-}" ]]; then export ICLOUD_TEAM PROVISIONING_PROFILE=${PROVISIONING_PROFILE:-}; fi
 
 if [[ -z "$CLOUD_TEAM" ]]; then
   APP="$OUT/BonView.app" scripts/bundle.sh >/dev/null
@@ -59,7 +73,7 @@ else
   ARCHIVE="$OUT/BonView.xcarchive"
   mkdir -p "$ARCHIVE/Products/Applications"
   HARDENED_RUNTIME=1 APP="$ARCHIVE/Products/Applications/BonView.app" scripts/bundle.sh >/dev/null
-  plist() { /usr/libexec/PlistBuddy -c "Print :$1" Resources/Info.plist; }
+  plist() { /usr/libexec/PlistBuddy -c "Print :$1" macOS/Resources/Info.plist; }
   cat > "$ARCHIVE/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -104,6 +118,12 @@ PLIST
     || { echo "the exported app lacks the hardened runtime" >&2; exit 1; }
 fi
 codesign --verify --deep --strict "$OUT/BonView.app"
+if [[ -n "${ICLOUD_TEAM:-}" ]]; then
+  codesign -d --entitlements - "$OUT/BonView.app" 2>/dev/null | grep -q ubiquity-kvstore-identifier \
+    || { echo "the signed app lacks the iCloud key-value storage entitlement" >&2; exit 1; }
+  [[ -f "$OUT/BonView.app/Contents/embedded.provisionprofile" ]] \
+    || { echo "the app has the iCloud entitlement but no provisioning profile (it would not launch)" >&2; exit 1; }
+fi
 FFV=$(<build/ffmpeg/.version)
 [[ -d "$OUT/BonView.app/Contents/Frameworks" ]] || { echo "FFmpeg was not bundled" >&2; exit 1; }
 

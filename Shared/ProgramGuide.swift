@@ -248,9 +248,7 @@ extension AppModel {
 extension Preferences {
     /// ~/Library/Application Support/BonView/EPG/<profile>.json
     static func epgURL(for profile: UUID) -> URL {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("BonView/EPG/\(profile.uuidString).json")
+        URL.applicationSupportDirectory.appendingPathComponent("BonView/EPG/\(profile.uuidString).json")
     }
 
     static func epgLastGrab(for profile: UUID) -> Date? {

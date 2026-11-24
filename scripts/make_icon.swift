@@ -1,4 +1,4 @@
-// Generates Resources/AppIcon.icns (and a 1024px PNG preview) for BonView.
+// Generates macOS/Resources/AppIcon.icns and the 1024px Resources/AppIcon.png (also the iOS app icon) for BonView.
 //   swift scripts/make_icon.swift
 // Everything is drawn with CoreGraphics paths (no SF Symbols / third-party artwork).
 import AppKit
@@ -125,9 +125,10 @@ for base in [16, 32, 128, 256, 512] {
 }
 let resources = root.appendingPathComponent("Resources")
 try png(1024).write(to: resources.appendingPathComponent("AppIcon.png"))
+try png(1024).write(to: root.appendingPathComponent("iOS/BonView/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
 let p = Process()
 p.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-p.arguments = ["-c", "icns", iconset.path, "-o", resources.appendingPathComponent("AppIcon.icns").path]
+p.arguments = ["-c", "icns", iconset.path, "-o", root.appendingPathComponent("macOS/Resources/AppIcon.icns").path]
 try p.run()
 p.waitUntilExit()
-print(p.terminationStatus == 0 ? "Resources/AppIcon.icns" : "iconutil failed")
+print(p.terminationStatus == 0 ? "macOS/Resources/AppIcon.icns" : "iconutil failed")

@@ -1,4 +1,6 @@
+#if os(macOS)
 import AppKit
+#endif
 import BonDriver
 import ChannelScan
 import Foundation
@@ -157,7 +159,7 @@ final class AppModel {
     /// When the last full grab of the current profile finished.
     var epgLastGrab: Date?
     var epgAutoGrab = Preferences.bool("epgAutoGrab", default: false) {
-        didSet { UserDefaults.standard.set(epgAutoGrab, forKey: "epgAutoGrab") }
+        didSet { Preferences.set(epgAutoGrab, forKey: "epgAutoGrab") }
     }
     @ObservationIgnored var epgGrabber: EPGGrabber?
     @ObservationIgnored let epgQueue = DispatchQueue(label: "bonview.epg-driver", qos: .utility)
@@ -210,19 +212,21 @@ final class AppModel {
         didSet { player.setDeinterlace(deinterlace); UserDefaults.standard.set(deinterlace.rawValue, forKey: "deinterlaceMode") }
     }
     var showCaptions = Preferences.bool("showCaptions", default: true) {
-        didSet { UserDefaults.standard.set(showCaptions, forKey: "showCaptions") }
+        didSet { Preferences.set(showCaptions, forKey: "showCaptions") }
     }
     var captionStyle = CaptionStyle(rawValue: UserDefaults.standard.string(forKey: "captionStyle") ?? "") ?? .broadcast {
-        didSet { UserDefaults.standard.set(captionStyle.rawValue, forKey: "captionStyle") }
+        didSet { Preferences.set(captionStyle.rawValue, forKey: "captionStyle") }
     }
     var showPanel = Preferences.bool("showPanel", default: true) {
         didSet { UserDefaults.standard.set(showPanel, forKey: "showPanel") }
     }
 
     // MARK: Screenshots (see Screenshot.swift)
+    #if os(macOS)
     var screenshotFolder: URL = Preferences.screenshotFolder {
         didSet { UserDefaults.standard.set(screenshotFolder.path, forKey: "screenshotFolder") }
     }
+    #endif
     var screenshotFormat = FrameSnapshot.Format(rawValue: UserDefaults.standard.string(forKey: "screenshotFormat") ?? "") ?? .png {
         didSet { UserDefaults.standard.set(screenshotFormat.rawValue, forKey: "screenshotFormat") }
     }
@@ -272,8 +276,11 @@ final class AppModel {
         }
         player.onVideoSizeChanged = { [weak self] in
             self?.videoSize = $0
+            #if os(macOS)
             self?.updateVideoScale()
+            #endif
         }
+        CloudSettings.onChange = { [weak self] in self?.applyCloudChanges($0) }
         let player = self.player
         let passive = passiveEPG
         router.set { player.feed($0); passive.feed($0) }
@@ -284,6 +291,33 @@ final class AppModel {
             guard let d = self.driver else { return }
             self.signalLevel = d.signalLevel
         }
+    }
+
+    // MARK: - iCloud
+
+    /// Settings changed on another device (already in UserDefaults): pick up what is shown now.
+    /// The connection is left alone; a new current server applies from the next connect.
+    private func applyCloudChanges(_ keys: Set<String>) {
+        if keys.contains("profiles") {
+            let list = Preferences.loadProfiles()
+            if list != profiles { profiles = list }
+        }
+        if keys.contains("showCaptions") {
+            let v = Preferences.bool("showCaptions", default: true)
+            if v != showCaptions { showCaptions = v }
+        }
+        if keys.contains("captionStyle"),
+           let v = CaptionStyle(rawValue: UserDefaults.standard.string(forKey: "captionStyle") ?? ""), v != captionStyle {
+            captionStyle = v
+        }
+        if keys.contains("epgAutoGrab") {
+            let v = Preferences.bool("epgAutoGrab", default: false)
+            if v != epgAutoGrab { epgAutoGrab = v }
+        }
+        guard let id = currentProfile?.id, !isScanning else { return }
+        if keys.contains("scan.\(id)") { scannedChannels = Preferences.scanResult(for: id) }
+        if keys.contains("channelOrder.\(id)") { channelOrder = Preferences.channelOrder(for: id) }
+        if keys.contains("hiddenChannels.\(id)") { hiddenEntries = Preferences.hiddenEntries(for: id) }
     }
 
     // MARK: - Connection
@@ -539,6 +573,13 @@ final class AppModel {
         }
     }
 
+    /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
+    /// 1920×1080 until a picture has been decoded.
+    var nativeVideoSize: CGSize {
+        videoSize.width > 0 && videoSize.height > 0 ? videoSize : CGSize(width: 1920, height: 1080)
+    }
+
+    #if os(macOS)
     // MARK: - Video size (50% / 100% / …)
 
     struct VideoScale: Hashable {
@@ -581,12 +622,6 @@ final class AppModel {
         return h
     }()
     @ObservationIgnored private weak var videoHost: VideoHostView?
-
-    /// Native display size (pixel aspect applied, e.g. 1440×1080 SAR 4:3 → 1920×1080).
-    /// 1920×1080 until a picture has been decoded.
-    var nativeVideoSize: CGSize {
-        videoSize.width > 0 && videoSize.height > 0 ? videoSize : CGSize(width: 1920, height: 1080)
-    }
 
     func videoHostDidLayout(_ host: VideoHostView) {
         videoHost = host
@@ -639,6 +674,7 @@ final class AppModel {
         }
         window.setFrame(frame, display: true, animate: true)
     }
+    #endif
 
     // MARK: - Display helpers
 

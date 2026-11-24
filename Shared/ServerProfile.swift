@@ -57,6 +57,21 @@ struct ServerProfile: Codable, Identifiable, Hashable {
         }
     }
 
+    /// A profile from a BonDriver_Proxy.ini / .conf (Proxy) or BonDriver_*.ini (Tunnel) file.
+    static func imported(from url: URL) throws -> ServerProfile {
+        let ok = url.startAccessingSecurityScopedResource()
+        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+        let data = try Data(contentsOf: url)
+        // Windows .ini files are usually Shift_JIS.
+        let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .shiftJIS) ?? ""
+        let name = url.deletingPathExtension().lastPathComponent
+        if TunnelConfig.looksLikeTunnelConfig(text) {
+            // BonDriver_hoge.ini of BonDriver_Tunnel (origin defaults to the file name).
+            return ServerProfile(name: name, kind: .tunnel, tunnel: try TunnelConfig.parse(text, fileName: url.lastPathComponent))
+        }
+        return ServerProfile(name: name, kind: .proxy, config: try ProxyConfig.parse(text))
+    }
+
     static let sample = ServerProfile(name: "地デジ (PT3)", config: ProxyConfig(address: "192.168.0.10", port: 1192, bonDriver: "BonDriver_PT3-T.dll"),
                                       tunnel: TunnelConfig(address: "192.168.0.10", origin: "PT3-T"))
 }
@@ -76,18 +91,19 @@ enum Preferences {
 
     static func loadProfiles() -> [ServerProfile] {
         migrateLegacyDefaults()
+        CloudSettings.start()
         guard let data = UserDefaults.standard.data(forKey: profilesKey),
               let list = try? JSONDecoder().decode([ServerProfile].self, from: data) else { return [] }
         return list
     }
 
     static func saveProfiles(_ list: [ServerProfile]) {
-        if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: profilesKey) }
+        if let data = try? JSONEncoder().encode(list) { set(data, forKey: profilesKey) }
     }
 
     static var currentProfileID: UUID? {
         get { UserDefaults.standard.string(forKey: currentKey).flatMap(UUID.init) }
-        set { UserDefaults.standard.set(newValue?.uuidString, forKey: currentKey) }
+        set { set(newValue?.uuidString, forKey: currentKey) }
     }
 
     static func lastChannel(for profile: UUID) -> (UInt32, UInt32)? {
@@ -97,7 +113,7 @@ enum Preferences {
     }
 
     static func setLastChannel(_ ch: (UInt32, UInt32), for profile: UUID) {
-        UserDefaults.standard.set("\(ch.0)-\(ch.1)", forKey: "lastChannel.\(profile)")
+        set("\(ch.0)-\(ch.1)", forKey: "lastChannel.\(profile)")
     }
 
     static func lastService(for profile: UUID, space: UInt32, channel: UInt32) -> UInt16? {
@@ -106,7 +122,7 @@ enum Preferences {
     }
 
     static func setLastService(_ sid: UInt16, for profile: UUID, space: UInt32, channel: UInt32) {
-        UserDefaults.standard.set(Int(sid), forKey: "lastService.\(profile).\(space)-\(channel)")
+        set(Int(sid), forKey: "lastService.\(profile).\(space)-\(channel)")
     }
 
     static func scanResult(for profile: UUID) -> [ScannedChannel] {
@@ -117,9 +133,9 @@ enum Preferences {
 
     static func setScanResult(_ list: [ScannedChannel], for profile: UUID) {
         if list.isEmpty {
-            UserDefaults.standard.removeObject(forKey: "scan.\(profile)")
+            set(nil, forKey: "scan.\(profile)")
         } else if let data = try? JSONEncoder().encode(list) {
-            UserDefaults.standard.set(data, forKey: "scan.\(profile)")
+            set(data, forKey: "scan.\(profile)")
         }
     }
 
@@ -128,7 +144,7 @@ enum Preferences {
     }
 
     static func setChannelOrder(_ ids: [String], for profile: UUID) {
-        UserDefaults.standard.set(ids.isEmpty ? nil : ids, forKey: "channelOrder.\(profile)")
+        set(ids.isEmpty ? nil : ids, forKey: "channelOrder.\(profile)")
     }
 
     static func hiddenEntries(for profile: UUID) -> Set<String> {
@@ -136,7 +152,7 @@ enum Preferences {
     }
 
     static func setHiddenEntries(_ ids: Set<String>, for profile: UUID) {
-        UserDefaults.standard.set(ids.isEmpty ? nil : ids.sorted(), forKey: "hiddenChannels.\(profile)")
+        set(ids.isEmpty ? nil : ids.sorted(), forKey: "hiddenChannels.\(profile)")
     }
 
     /// Entry IDs already seen by a scan (auto-hide applies only to new ones).
@@ -145,7 +161,13 @@ enum Preferences {
     }
 
     static func setKnownEntries(_ ids: Set<String>, for profile: UUID) {
-        UserDefaults.standard.set(ids.isEmpty ? nil : ids.sorted(), forKey: "knownChannels.\(profile)")
+        set(ids.isEmpty ? nil : ids.sorted(), forKey: "knownChannels.\(profile)")
+    }
+
+    /// Write a setting (nil removes it); settings shared through iCloud are sent there too.
+    static func set(_ value: Any?, forKey key: String) {
+        if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+        CloudSettings.didSet(key)
     }
 
     static func double(_ key: String, default d: Double) -> Double {
@@ -164,6 +186,7 @@ enum Preferences {
         return bool("deinterlace", default: true) ? .fieldRate : .off
     }
 
+    #if os(macOS)
     /// Where screenshots go: the saved folder, or ~/Pictures/BonView.
     static var screenshotFolder: URL {
         if let path = UserDefaults.standard.string(forKey: "screenshotFolder"), !path.isEmpty {
@@ -173,4 +196,5 @@ enum Preferences {
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Pictures")
         return pictures.appendingPathComponent("BonView", isDirectory: true)
     }
+    #endif
 }
