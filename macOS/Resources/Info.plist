@@ -4,30 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>ja</string>
-	<key>CFBundleExecutable</key>
-	<string>BonView</string>
-	<key>CFBundleIdentifier</key>
-	<string>io.github.shigeya-t.BonView</string>
-	<key>CFBundleName</key>
-	<string>BonView</string>
 	<key>CFBundleDisplayName</key>
 	<string>BonView</string>
-	<key>CFBundleIconFile</key>
-	<string>AppIcon</string>
-	<key>CFBundlePackageType</key>
-	<string>APPL</string>
-	<key>CFBundleShortVersionString</key>
-	<string>0.1.3</string>
-	<key>CFBundleVersion</key>
-	<string>4</string>
-	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
-	<key>LSApplicationCategoryType</key>
-	<string>public.app-category.entertainment</string>
-	<key>NSHighResolutionCapable</key>
-	<true/>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>LAN上のBonDriverProxyサーバーに接続してテレビ放送を受信します。</string>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
@@ -43,5 +21,27 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleExecutable</key>
+	<string>BonView</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.shigeya-t.BonView</string>
+	<key>CFBundleName</key>
+	<string>BonView</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.3</string>
+	<key>CFBundleVersion</key>
+	<string>5</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.entertainment</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LAN上のBonDriverProxyサーバーに接続してテレビ放送を受信します。</string>
 </dict>
 </plist>
