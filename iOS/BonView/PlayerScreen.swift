@@ -5,13 +5,20 @@ import TSCore
 
 /// Main screen. Portrait: picture on top, controls and the panel below. iPhone landscape: the
 /// picture fills the screen and the controls appear on tap. Wide (iPad landscape): picture with
-/// the panel at the side, like the macOS window.
+/// the panel at the side, like the macOS window. The full-screen button locks the screen to landscape
+/// and shows only the picture; channel and programme information appear for a few seconds on entry,
+/// on channel / programme changes and on tap.
 struct PlayerScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var sheet: Sheet?
     @State private var controlsVisible = true
     @State private var hideTask: Task<Void, Never>?
+    /// Full screen chosen with the button (landscape is locked while it is on).
+    @State private var isFullScreen = false
+
+    /// How long the information and controls stay up in full screen.
+    private static let overlayDuration: Duration = .seconds(5)
 
     enum Sheet: String, Identifiable {
         case settings, guide
@@ -22,13 +29,13 @@ struct PlayerScreen: View {
         @Bindable var model = model
         GeometryReader { geo in
             let landscape = geo.size.width > geo.size.height
-            if landscape && verticalSizeClass == .compact {
+            if isFullScreen || (landscape && verticalSizeClass == .compact) {
                 fullScreen
             } else if landscape {
                 HStack(spacing: 0) {
                     VStack(spacing: 0) {
                         picture.frame(maxHeight: .infinity)
-                        ControlBar(sheet: $sheet)
+                        ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
                     }
                     Divider()
                     PanelView().frame(width: min(380, geo.size.width * 0.36))
@@ -36,7 +43,7 @@ struct PlayerScreen: View {
             } else {
                 VStack(spacing: 0) {
                     picture.aspectRatio(16 / 9, contentMode: .fit)
-                    ControlBar(sheet: $sheet)
+                    ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
                     Divider()
                     PanelView()
                 }
@@ -71,7 +78,7 @@ struct PlayerScreen: View {
         .clipped()
     }
 
-    // MARK: Full screen (iPhone landscape)
+    // MARK: Full screen (button, or iPhone landscape)
 
     private var fullScreen: some View {
         ZStack {
@@ -81,23 +88,16 @@ struct PlayerScreen: View {
                 .onTapGesture { setControlsVisible(!controlsVisible) }
             if controlsVisible {
                 VStack(spacing: 0) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(model.channelTitle).font(.headline)
-                            if let ev = model.presentEvent {
-                                Text("\(EventFormat.timeRange(ev))  \(ev.title)").font(.caption).lineLimit(1)
-                            }
-                        }
-                        .foregroundStyle(.white)
-                        Spacer()
-                    }
-                    .padding()
-                    .background(LinearGradient(colors: [.black.opacity(0.7), .clear], startPoint: .top, endPoint: .bottom))
+                    FullScreenInfo(exit: exitFullScreen)
+                        .background(LinearGradient(colors: [.black.opacity(0.75), .black.opacity(0.4), .clear],
+                                                   startPoint: .top, endPoint: .bottom)
+                                        .ignoresSafeArea())
                     Spacer()
-                    ControlBar(sheet: $sheet, onInteraction: { scheduleHide() })
+                    ControlBar(sheet: $sheet, isFullScreen: true, toggleFullScreen: exitFullScreen,
+                               onInteraction: { scheduleHide() })
                         .background(.black.opacity(0.55), in: Capsule())
                         .environment(\.colorScheme, .dark)
-                        .padding(.bottom, 8)
+                        .padding(.bottom, 20)
                         .fixedSize()
                 }
                 .transition(.opacity)
@@ -105,21 +105,96 @@ struct PlayerScreen: View {
         }
         .statusBarHidden(!controlsVisible)
         .persistentSystemOverlays(.hidden)
-        .onAppear { scheduleHide() }
+        // Let the control bar near the bottom edge get taps first (home indicator gesture needs a second swipe).
+        .defersSystemGestures(on: .bottom)
+        .onAppear { setControlsVisible(true) }
+        // Show what is on air again after a channel or programme change.
+        .onChange(of: infoKey) { setControlsVisible(true) }
+        .onChange(of: sheet) { _, s in if s == nil { scheduleHide() } }
+    }
+
+    /// Changes when the channel or the programme on air changes.
+    private var infoKey: String {
+        "\(model.channelTitle)|\(model.presentEvent.map { String($0.eventID) } ?? "-")"
+    }
+
+    private func enterFullScreen() {
+        isFullScreen = true
+        OrientationLock.lockLandscape()
+    }
+
+    /// Also used to leave the automatic full screen of a sideways iPhone: rotates back to portrait.
+    private func exitFullScreen() {
+        isFullScreen = false
+        OrientationLock.release()
     }
 
     private func setControlsVisible(_ visible: Bool) {
         withAnimation(.easeInOut(duration: 0.2)) { controlsVisible = visible }
-        if visible { scheduleHide() }
+        if visible { scheduleHide() } else { hideTask?.cancel() }
     }
 
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: Self.overlayDuration)
             guard !Task.isCancelled, sheet == nil else { return }
             withAnimation(.easeInOut(duration: 0.3)) { controlsVisible = false }
         }
+    }
+}
+
+/// Channel, programme on air (title, time, progress, description) and the next programme, shown at
+/// the top in full screen.
+private struct FullScreenInfo: View {
+    @Environment(AppModel.self) private var model
+    var exit: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(model.channelTitle).font(.headline)
+                if let ev = model.presentEvent {
+                    Text(ev.title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                    HStack(spacing: 8) {
+                        Text(EventFormat.timeRange(ev)).monospacedDigit()
+                        if let p = progress(ev) {
+                            ProgressView(value: p).tint(.white).frame(width: 120)
+                        }
+                    }
+                    .font(.caption)
+                    if !ev.text.isEmpty {
+                        Text(ev.text).font(.caption).lineLimit(2).opacity(0.85)
+                    }
+                }
+                if let next = model.followingEvent {
+                    Text("次: \(next.start.map { EventFormat.time.string(from: $0) } ?? "")  \(next.title)")
+                        .font(.caption).lineLimit(1).opacity(0.75)
+                }
+            }
+            .frame(maxWidth: 640, alignment: .leading)
+            Spacer(minLength: 0)
+            Button(action: exit) {
+                Label("全画面を終了", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .labelStyle(.iconOnly)
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+        }
+        .foregroundStyle(.white)
+        .tint(.white)
+        .padding(.horizontal)
+        .padding(.top, 8)
+        .padding(.bottom, 24)
+    }
+
+    /// Elapsed fraction of the programme, or nil when the clock is outside it (e.g. a recorded file).
+    private func progress(_ ev: EventInfo) -> Double? {
+        guard let start = ev.start, let duration = ev.duration, duration > 0 else { return nil }
+        let p = (model.programClock ?? Date()).timeIntervalSince(start) / duration
+        return (0...1).contains(p) ? p : nil
     }
 }
 
@@ -127,6 +202,8 @@ struct PlayerScreen: View {
 struct ControlBar: View {
     @Environment(AppModel.self) private var model
     @Binding var sheet: PlayerScreen.Sheet?
+    var isFullScreen: Bool
+    var toggleFullScreen: () -> Void
     var onInteraction: () -> Void = {}
 
     var body: some View {
@@ -146,6 +223,10 @@ struct ControlBar: View {
             .foregroundStyle(model.showCaptions ? Color.accentColor : Color.secondary)
             button("番組表", model.isGrabbingEPG ? "calendar.badge.clock" : "calendar") { sheet = .guide }
             button("設定", "gearshape") { sheet = .settings }
+            button(isFullScreen ? "全画面を終了" : "全画面",
+                   isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right") {
+                toggleFullScreen()
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -159,7 +240,8 @@ struct ControlBar: View {
             Label(label, systemImage: symbol)
                 .labelStyle(.iconOnly)
                 .font(.title3)
-                .frame(width: 44, height: 40)
+                .frame(width: 40, height: 40)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
     }
