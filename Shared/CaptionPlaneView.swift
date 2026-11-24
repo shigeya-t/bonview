@@ -9,7 +9,11 @@ struct CaptionPlaneView: View {
     let videoSize: CGSize
 
     /// Rounded gothic is the usual look of Japanese TV captions; falls back to the system font.
+    #if os(macOS)
     private static let fontName = NSFont(name: "HiraMaruProN-W4", size: 12) != nil ? "HiraMaruProN-W4" : "HiraginoSans-W4"
+    #else
+    private static let fontName = UIFont(name: "HiraMaruProN-W4", size: 12) != nil ? "HiraMaruProN-W4" : "HiraginoSans-W4"
+    #endif
 
     var body: some View {
         GeometryReader { geo in

@@ -7,6 +7,10 @@
 #   SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" scripts/bundle.sh
 #       sign for distribution: hardened runtime + secure timestamp (package_release.sh notarizes it)
 #   HARDENED_RUNTIME=1 scripts/bundle.sh           ad-hoc, but with the hardened runtime flag
+#   ICLOUD_TEAM=<team ID> scripts/bundle.sh        add the iCloud key-value storage entitlement (settings sync);
+#       the app then only launches once signed with a provisioning profile of that team: package_release.sh's
+#       DEVELOPMENT_TEAM export does that, or give PROVISIONING_PROFILE=<Developer ID .provisionprofile>
+#       together with SIGN_IDENTITY. Without ICLOUD_TEAM the app has no entitlements and settings stay local.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -36,8 +40,8 @@ APP=${APP:-build/BonView.app}
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/BonView"
-cp Resources/Info.plist "$APP/Contents/Info.plist"
-[[ -f Resources/AppIcon.icns ]] && cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cp macOS/Resources/Info.plist "$APP/Contents/Info.plist"
+[[ -f macOS/Resources/AppIcon.icns ]] && cp macOS/Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # Copy the @rpath FFmpeg dylibs the binary (and they themselves) load into Contents/Frameworks.
 # A Homebrew FFmpeg has absolute install names; then nothing is copied and the app needs Homebrew.
@@ -69,12 +73,31 @@ else
 <p>映像・音声のデコードに <a href=\"https://ffmpeg.org/\">FFmpeg</a> を使っています（このビルドには同梱していません）。</p>"
 fi
 # Credits for the standard About panel (NSApplication reads Contents/Resources/Credits.html).
-FFMPEG_CREDITS="$FFMPEG_CREDITS" python3 -c 'import os, sys; sys.stdout.write(open("Resources/Credits.html").read().replace("@FFMPEG@", os.environ["FFMPEG_CREDITS"]))' \
+FFMPEG_CREDITS="$FFMPEG_CREDITS" python3 -c 'import os, sys; sys.stdout.write(open("macOS/Resources/Credits.html").read().replace("@FFMPEG@", os.environ["FFMPEG_CREDITS"]))' \
   > "$APP/Contents/Resources/Credits.html"
 if [[ -n "${BUNDLE_ID:-}" ]]; then
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Contents/Info.plist"
 fi
+if [[ -n "${ICLOUD_TEAM:-}" ]]; then
+  # Same identifier as the iOS app ($(TeamIdentifierPrefix)<bundle id>), so they share one store.
+  APP_ID="$ICLOUD_TEAM.$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+  ENTITLEMENTS="$(dirname "$APP")/BonView.entitlements"
+  cat > "$ENTITLEMENTS" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>com.apple.application-identifier</key><string>$APP_ID</string>
+  <key>com.apple.developer.team-identifier</key><string>$ICLOUD_TEAM</string>
+  <key>com.apple.developer.ubiquity-kvstore-identifier</key><string>$APP_ID</string>
+</dict>
+</plist>
+PLIST
+  [[ -n "${PROVISIONING_PROFILE:-}" ]] && cp "$PROVISIONING_PROFILE" "$APP/Contents/embedded.provisionprofile"
+  SIGN_ARGS+=(--entitlements "$ENTITLEMENTS")
+fi
 # Nested code (Contents/Frameworks) is already signed; sign the bundle last.
 sign "$APP"
+[[ -n "${ENTITLEMENTS:-}" ]] && rm -f "$ENTITLEMENTS"
 codesign --verify --strict "$APP"
 echo "$APP"

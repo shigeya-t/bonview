@@ -45,6 +45,7 @@ flowchart LR
 - [動作環境](#動作環境)
 - [ダウンロード](#ダウンロード)
 - [ビルドとインストール](#ビルドとインストール)
+- [iOS / iPadOS 版](#ios--ipados-版)
 - [サーバー側の準備](#サーバー側の準備)
 - [BonView の設定](#bonview-の設定)
 - [使い方](#使い方)
@@ -140,6 +141,30 @@ swift build                  # すべてのターゲットをビルド
 swift test                   # ユニットテスト（ffmpeg CLI があればデコードテストも実行。FFMPEG_CLI で場所を指定可）
 swift run BonView            # .app を作らずに起動
 ```
+
+## iOS / iPadOS 版
+
+iPhone / iPad 用のアプリもあります（iOS 17 以降、Apple シリコンのシミュレーターまたは実機）。macOS 版と同じモジュール（`BonDriver` / `TSCore` / `MediaCore` / `ChannelScan`）とアプリのモデル（`Shared/`）を使い、画面だけを iOS 用に作っています。配布はしていないので、Xcode でビルドしてください。
+
+```bash
+brew install xcodegen                           # Xcode プロジェクトの生成に使います
+scripts/build_ios.sh                            # iOS 用 FFmpeg をビルド → iOS/BonView-iOS.xcodeproj を生成 → シミュレーター用にビルド
+GENERATE_ONLY=1 DEVELOPMENT_TEAM=<チーム ID> scripts/build_ios.sh   # 実機用: プロジェクトだけ作り、Xcode で開いて実行
+```
+
+- `scripts/build_ffmpeg_ios.sh` が、macOS 版と同じ版・同じ構成の FFmpeg を実機（arm64）とシミュレーター（arm64）向けにビルドし、`build/ffmpeg-ios/lib*.xcframework`（動的フレームワーク）を作ります。アプリの `Frameworks` に同梱します。`Package.swift` はこれがあるときだけ iOS 用に使います。
+- 縦向きでは映像の下に操作ボタンとパネル（チャンネル / 番組 / 音声・字幕 / 情報）、iPhone の横向きでは全画面（タップで操作ボタン）、iPad の横向きでは右にパネルを表示します。
+- サーバーの登録、チャンネルスキャン、番組表、字幕・文字スーパー、音声切替、TS ファイルの再生（「ファイル」から）に対応しています。スクリーンショットと Wake on LAN（ブロードキャストの送信に Apple の許可が必要）は macOS 版のみです。
+- 初めて LAN 上のサーバーに接続するとき、「ローカルネットワーク」へのアクセスの許可を求められます。許可しないと接続できません。
+- アプリがバックグラウンドに移ると切断し（チューナーを空けます）、戻ると再接続します。
+
+### iCloud での設定の共有
+
+BonDriver サーバーの一覧、チャンネル一覧（スキャン結果・並び順・非表示）、前回のチャンネル、字幕の表示と番組表の自動取得の設定を、同じ Apple アカウントの Mac・iPhone・iPad で共有します（iCloud のキー値ストア）。音量・デコード・インターレース解除・スクリーンショットの設定と番組表のデータは端末ごとです。設定画面の「iCloud で設定を同期」で切り替えられます。
+
+- 初めて同期するときは、サーバーの一覧は各端末のものを合わせ、それ以外は iCloud にある値を使います。
+- iCloud を使うには、iCloud の権限（entitlement）付きで署名したアプリが必要です。iOS 版は Xcode で `DEVELOPMENT_TEAM` を指定してビルドすれば有効になります。Mac 版は `scripts/package_release.sh` を `DEVELOPMENT_TEAM` 付きで実行した配布版で有効になります（App ID に iCloud の機能が必要です。iOS 版を Xcode の自動署名でビルドすると有効になります）。キーチェーンの証明書で署名する場合は `ICLOUD_TEAM=<チーム ID> PROVISIONING_PROFILE=<iCloud 付きの Developer ID プロファイル>` を指定します。
+- `scripts/bundle.sh` で作るアドホック署名の Mac 版は iCloud を使えず、設定はその Mac だけに保存されます。
 
 ## サーバー側の準備
 
@@ -356,7 +381,9 @@ Swift Package Manager の 1 つのパッケージで、次のモジュールに�
 | `CFFmpeg` | libavcodec / libavfilter / libswresample / libswscale の薄い C ラッパー |
 | `MediaCore` | デコード（VideoToolbox / FFmpeg）、PTS の管理、`AVSampleBufferRenderSynchronizer` による表示 |
 | `ChannelScan` | チャンネルスキャン、番組表の取得（`EPGGrabber`） |
-| `BonView` | SwiftUI アプリ本体 |
+| `BonView` | macOS アプリ本体（`macOS/BonView`、`Info.plist` などは `macOS/Resources`） |
+| `Shared/` | アプリのモデル・番組表・字幕描画など、macOS 版と iOS 版で共通のコード（macOS のターゲットからはシンボリックリンク `macOS/BonView/Shared` で参照） |
+| `iOS/` | iOS / iPadOS アプリ（XcodeGen の `project.yml` と iOS 用の画面） |
 | `bdpcat` | コマンドラインクライアント |
 
 開発者向けの詳しい説明は [AGENTS.md](AGENTS.md) にあります。
@@ -379,6 +406,6 @@ BonView のソースコードは [MIT License](LICENSE) で公開しています
 
 - BonDriverProxy のプロトコル実装は [BonDriverProxy_Linux](https://github.com/u-n-k-n-o-w-n/BonDriverProxy_Linux)（MIT License）を、BonDriverTunnel のプロトコル実装は [BonDriverTunnel](https://github.com/xtne6f/BonDriverTunnel)（MIT License）を参考に、Swift で書き直したものです。
 - ARIB 外字（追加記号・追加漢字）の Unicode 対応表は [libaribcaption](https://github.com/xqq/libaribcaption)（ISC 形式のライセンス）のものを使っています（`Sources/TSCore/ARIBGaiji.swift` に著作権表示を記載）。
-- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。改変していないソースは、各リリースに添付しているほか、[ffmpeg.org](https://ffmpeg.org/releases/) からも入手できます。
-- アプリの「BonView について」に、BonView・FFmpeg・libaribcaption のクレジットを表示します（`Resources/Credits.html`）。ライセンス文は `BonView.app/Contents/Resources/Licenses/` に入っています。
+- `.app` に同梱する [FFmpeg](https://ffmpeg.org/) は LGPL 2.1 以降のライセンスです（GPL / nonfree の部品は有効にしていません）。動的ライブラリとして `Contents/Frameworks` に置いてあり、差し替えられます。ビルド手順（configure の設定）は `scripts/build_ffmpeg.sh` にあります。改変していないソースは、各リリースに添付しているほか、[ffmpeg.org](https://ffmpeg.org/releases/) からも入手できます。iOS 版も同じ FFmpeg を動的フレームワークとして `BonView.app/Frameworks` に同梱します（`scripts/build_ffmpeg_ios.sh`）。
+- アプリの「BonView について」に、BonView・FFmpeg・libaribcaption のクレジットを表示します（`macOS/Resources/Credits.html`）。ライセンス文は `BonView.app/Contents/Resources/Licenses/` に入っています。
 - `FFMPEG_PREFIX` で Homebrew の FFmpeg（GPL 構成）を使ってビルドしたバイナリを配布する場合は、GPL の条件に従う必要があります。
