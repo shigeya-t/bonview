@@ -1,4 +1,4 @@
-// Generates macOS/Resources/AppIcon.icns and the 1024px Resources/AppIcon.png (also the iOS app icon) for BonView.
+// Generates macOS/Resources/AppIcon.icns and the 1024px Resources/AppIcon.png and the full-bleed, opaque iOS app icon for BonView.
 //   swift scripts/make_icon.swift
 // Everything is drawn with CoreGraphics paths (no SF Symbols / third-party artwork).
 import AppKit
@@ -9,19 +9,28 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
             blue: CGFloat(hex & 0xFF) / 255, alpha: a)
 }
 
-func drawIcon(_ ctx: CGContext, size: CGFloat) {
+/// `fullBleed`: iOS variant — the body fills the whole square without rounded corners or shadow (the
+/// system applies the mask), and the image must be opaque for App Store Connect.
+func drawIcon(_ ctx: CGContext, size: CGFloat, fullBleed: Bool = false) {
     let s = size / 1024
     ctx.scaleBy(x: s, y: s)
     // Flip to top-left origin for easier layout.
     ctx.translateBy(x: 0, y: 1024)
     ctx.scaleBy(x: 1, y: -1)
+    if fullBleed {
+        ctx.scaleBy(x: 1024 / 824, y: 1024 / 824)
+        ctx.translateBy(x: -100, y: -100)
+    }
     let space = CGColorSpace(name: CGColorSpace.sRGB)!
 
     // macOS icon grid: 824×824 body with ~185 corner radius, centred, with a soft drop shadow.
     let body = CGRect(x: 100, y: 100, width: 824, height: 824)
-    let bodyPath = CGPath(roundedRect: body, cornerWidth: 185, cornerHeight: 185, transform: nil)
+    let radius: CGFloat = fullBleed ? 0 : 185
+    let bodyPath = CGPath(roundedRect: body, cornerWidth: radius, cornerHeight: radius, transform: nil)
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: 12), blur: 28, color: rgb(0x000000, 0.35))
+    if !fullBleed {
+        ctx.setShadow(offset: CGSize(width: 0, height: 12), blur: 28, color: rgb(0x000000, 0.35))
+    }
     ctx.addPath(bodyPath)
     ctx.setFillColor(rgb(0x1B2366))
     ctx.fillPath()
@@ -106,11 +115,12 @@ func drawIcon(_ ctx: CGContext, size: CGFloat) {
     ctx.fillPath()
 }
 
-func png(_ size: Int) -> Data {
+func png(_ size: Int, fullBleed: Bool = false) -> Data {
+    let alpha: CGImageAlphaInfo = fullBleed ? .noneSkipLast : .premultipliedLast
     let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
                         space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
-    drawIcon(ctx, size: CGFloat(size))
+                        bitmapInfo: alpha.rawValue)!
+    drawIcon(ctx, size: CGFloat(size), fullBleed: fullBleed)
     let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
     return rep.representation(using: .png, properties: [:])!
 }
@@ -125,7 +135,7 @@ for base in [16, 32, 128, 256, 512] {
 }
 let resources = root.appendingPathComponent("Resources")
 try png(1024).write(to: resources.appendingPathComponent("AppIcon.png"))
-try png(1024).write(to: root.appendingPathComponent("iOS/BonView/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
+try png(1024, fullBleed: true).write(to: root.appendingPathComponent("iOS/BonView/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
 let p = Process()
 p.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
 p.arguments = ["-c", "icns", iconset.path, "-o", root.appendingPathComponent("macOS/Resources/AppIcon.icns").path]
