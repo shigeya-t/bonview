@@ -48,37 +48,59 @@ public struct TSPacketSplitter {
 
     public init() {}
 
-    public mutating func reset() { carry.removeAll(keepingCapacity: true) }
+    public mutating func reset() {
+        carry.removeAll(keepingCapacity: true)
+        syncLossCount = 0
+    }
 
     public mutating func split(_ data: Data, _ body: (TSPacket) -> Void) {
         if carry.isEmpty {
-            data.withUnsafeBytes { consume($0, body) }
-        } else {
-            carry.append(contentsOf: data)
-            let buf = carry
-            carry.removeAll(keepingCapacity: true)
-            buf.withUnsafeBytes { consume($0, body) }
+            data.withUnsafeBytes { _ = consume($0, body, keepTail: true) }
+            return
+        }
+        // Join the carried bytes with the start of `data` only (not all of it: copying every
+        // chunk while a partial packet is pending costs as much as the demuxing).
+        let headCount = min(data.count, 2 * tsPacketSize)
+        var head = carry
+        head.append(contentsOf: data.prefix(headCount))
+        let carried = carry.count
+        carry.removeAll(keepingCapacity: true)
+        guard headCount < data.count else {
+            head.withUnsafeBytes { _ = consume($0, body, keepTail: true) }
+            return
+        }
+        // With two packets' worth of `data` in `head`, consumption always stops inside `data`.
+        let stop = head.withUnsafeBytes { consume($0, body, keepTail: false) }
+        let offset = max(stop - carried, 0)
+        data.withUnsafeBytes { all in
+            _ = consume(UnsafeRawBufferPointer(rebasing: all[offset...]), body, keepTail: true)
         }
     }
 
-    private mutating func consume(_ buf: UnsafeRawBufferPointer, _ body: (TSPacket) -> Void) {
+    /// Emits the packets in `buf`; returns where it stopped. With `keepTail` the rest is carried
+    /// over to the next call.
+    private mutating func consume(_ buf: UnsafeRawBufferPointer, _ body: (TSPacket) -> Void, keepTail: Bool) -> Int {
         var i = 0
         let n = buf.count
-        while i + tsPacketSize <= n {
+        scan: while i + tsPacketSize <= n {
             if buf[i] != 0x47 || (i + tsPacketSize < n && buf[i + tsPacketSize] != 0x47) {
-                // Find the next position where two consecutive sync bytes line up.
+                // Find the next position where two consecutive sync bytes line up. A candidate
+                // whose follower is not here yet waits for more data (a lone 0x47 in garbage
+                // would otherwise be taken as a packet).
                 syncLossCount += 1
                 var j = i + 1
-                while j < n {
-                    if buf[j] == 0x47 && (j + tsPacketSize >= n || buf[j + tsPacketSize] == 0x47) { break }
+                while j + tsPacketSize < n {
+                    if buf[j] == 0x47 && buf[j + tsPacketSize] == 0x47 { break }
                     j += 1
                 }
                 i = j
+                if j + tsPacketSize >= n { break scan }
                 continue
             }
             body(TSPacket(UnsafeRawBufferPointer(rebasing: buf[i..<(i + tsPacketSize)])))
             i += tsPacketSize
         }
-        if i < n { carry.append(contentsOf: buf[i..<n]) }
+        if keepTail && i < n { carry.append(contentsOf: buf[i..<n]) }
+        return i
     }
 }

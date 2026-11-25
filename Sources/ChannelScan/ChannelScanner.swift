@@ -135,6 +135,7 @@ public final class ChannelScanner: @unchecked Sendable {
     public func scan(_ driver: BonDriver, spaces: [TuningSpace], onEvent: ((Event) -> Void)? = nil) -> [ScannedChannel] {
         let channels = spaces.flatMap { s in s.channels.map { (s.name, $0) } }
         var found: [ScannedChannel] = []
+        var previousTSID: UInt16?
         for (i, (spaceName, ch)) in channels.enumerated() {
             if isCancelled { break }
             onEvent?(.started(ch, index: i, total: channels.count))
@@ -145,21 +146,30 @@ public final class ChannelScanner: @unchecked Sendable {
             // Data queued before SetChannel returned may belong to the previous channel.
             demuxLock.lock(); demux = TSDemuxer(); demuxLock.unlock()
 
-            let start = Date()
+            let start = ProcessInfo.processInfo.systemUptime
             var result: ScannedChannel?
             while !isCancelled {
                 usleep(50_000)
-                let elapsed = Date().timeIntervalSince(start)
+                let elapsed = ProcessInfo.processInfo.systemUptime - start
                 demuxLock.lock()
-                let tsid = demux.transportStreamID
+                var tsid = demux.transportStreamID
+                if tsid != nil, tsid == previousTSID, elapsed < 1 {
+                    // Packets of the previous channel still in flight: start over.
+                    demux = TSDemuxer()
+                    tsid = nil
+                }
                 let onid = demux.originalNetworkID
                 let services = demux.services
                 let key = demux.remoteControlKeyID
                 let hasNIT = demux.hasNIT
+                let hasSDT = demux.hasSDT
                 demuxLock.unlock()
 
                 if let tsid {
-                    let named = !services.isEmpty && services.allSatisfy { !$0.name.isEmpty }
+                    // Data and one-seg services are often missing from the SDT: once it has
+                    // arrived, don't wait for their names until the timeout.
+                    let named = !services.isEmpty
+                        && (services.allSatisfy { !$0.name.isEmpty } || (hasSDT && elapsed >= 2))
                     let scanned = ScannedChannel(
                         space: ch.space, channel: ch.index, channelName: ch.name, spaceName: spaceName,
                         transportStreamID: tsid, originalNetworkID: onid, remoteControlKeyID: key,
@@ -175,6 +185,7 @@ public final class ChannelScanner: @unchecked Sendable {
             }
             if isCancelled { break }
             if let result {
+                previousTSID = result.transportStreamID
                 found.append(result)
                 onEvent?(.found(result))
             } else {

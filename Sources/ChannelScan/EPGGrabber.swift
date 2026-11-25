@@ -76,19 +76,20 @@ public final class EPGGrabber: @unchecked Sendable {
             }
             // Data queued before SetChannel returned may belong to the previous channel.
             collector.resetStream()
-            let start = Date()
+            // System uptime for the timeouts (the wall clock may be adjusted meanwhile).
+            let start = ProcessInfo.processInfo.systemUptime
             var lastUpdate = start
             while !isCancelled {
                 usleep(200_000)
-                let now = Date()
+                let now = ProcessInfo.processInfo.systemUptime
                 if isComplete(ch) { break }
                 if let last = collector.lastNewScheduleSection {
-                    if now.timeIntervalSince(last) >= options.stallTimeout { break }
-                } else if now.timeIntervalSince(start) >= options.noDataTimeout {
+                    if Date().timeIntervalSince(last) >= options.stallTimeout { break }
+                } else if now - start >= options.noDataTimeout {
                     break
                 }
-                if now.timeIntervalSince(start) >= options.channelTimeout { break }
-                if now.timeIntervalSince(lastUpdate) >= options.updateInterval {
+                if now - start >= options.channelTimeout { break }
+                if now - lastUpdate >= options.updateInterval {
                     lastUpdate = now
                     let u = collector.takeUpdates()
                     if !u.isEmpty { onEvent(.updates(u)) }

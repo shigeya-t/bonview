@@ -147,15 +147,19 @@ public struct CaptionDRCS: Hashable, Sendable {
     public var depth: Int
     public var pixels: [UInt8]
 
+    /// Set in the codes of DRCS-0 (2-byte) characters: their first byte is in the same range as the
+    /// set numbers of the 1-byte DRCS sets (0x41…0x4F).
+    static let drcs0Flag: UInt16 = 0x8000
+
     /// Parses a DRCS data unit (parameter 0x30 = 1-byte sets, 0x31 = DRCS-0) into code → pattern.
     /// Only uncompressed patterns (mode 0/1) are supported; geometric ones are skipped.
-    static func parseUnit(_ d: [UInt8]) -> [UInt16: CaptionDRCS] {
+    static func parseUnit(_ d: [UInt8], drcs0: Bool = false) -> [UInt16: CaptionDRCS] {
         var out: [UInt16: CaptionDRCS] = [:]
         guard !d.isEmpty else { return out }
         var i = 1
         for _ in 0..<Int(d[0]) {
             guard i + 3 <= d.count else { break }
-            let code = UInt16(d[i]) << 8 | UInt16(d[i + 1])
+            let code = UInt16(d[i]) << 8 | UInt16(d[i + 1]) | (drcs0 ? drcs0Flag : 0)
             let fonts = Int(d[i + 2])
             i += 3
             for _ in 0..<fonts {
@@ -486,6 +490,8 @@ public struct CaptionDecoder: Sendable {
         if group.isManagement {
             languages = group.languages
             if let f = group.formats.first { screen.defaultFormat = f }
+            // DRCS may also be sent with the management data (used by every language).
+            for unit in group.units { addDRCS(unit) }
             return false
         }
         let wanted = languages.indices.contains(languageIndex) ? languages[languageIndex].tag + 1 : 1
@@ -493,11 +499,16 @@ public struct CaptionDecoder: Sendable {
         let before = screen.frame
         for unit in group.units {
             switch unit.parameter {
-            case 0x30, 0x31: screen.drcs.merge(CaptionDRCS.parseUnit(unit.data)) { _, new in new }
+            case 0x30, 0x31: addDRCS(unit)
             case 0x20: screen.apply(unit.data)
             default: break
             }
         }
         return screen.frame != before
+    }
+
+    private mutating func addDRCS(_ unit: CaptionDataUnit) {
+        guard unit.parameter == 0x30 || unit.parameter == 0x31 else { return }
+        screen.drcs.merge(CaptionDRCS.parseUnit(unit.data, drcs0: unit.parameter == 0x31)) { _, new in new }
     }
 }
