@@ -2,22 +2,33 @@ import CoreVideo
 import Foundation
 import TSCore
 
-/// Unwraps 33-bit 90 kHz timestamps into a monotonic timeline (seconds).
+/// Unwraps 33-bit 90 kHz timestamps into a continuous 64-bit timeline. Applied to PES
+/// timestamps before decoding, so the decoders and filters (bwdif interpolates field times)
+/// never see the wrap.
 struct PTSUnwrapper {
     private var offset: Int64 = 0
     private var last: Int64?
-    private static let wrap: Int64 = 1 << 33
+    static let wrap: Int64 = 1 << 33
 
     mutating func reset() { offset = 0; last = nil }
 
-    mutating func seconds(_ raw: Int64) -> Double {
+    /// Unwraps an audio/video PTS and moves the timeline along.
+    mutating func ticks(_ raw: Int64) -> Int64 {
+        let v = peek(raw)
+        offset = v - (raw & (Self.wrap - 1))
+        last = v
+        return v
+    }
+
+    /// The unwrapped value nearest the timeline, without moving it (DTS, caption PTS: a bogus
+    /// value there cannot shift audio and video).
+    func peek(_ raw: Int64) -> Int64 {
         var v = (raw & (Self.wrap - 1)) + offset
         if let l = last {
-            if v - l < -(Self.wrap / 2) { offset += Self.wrap; v += Self.wrap }
-            else if v - l > Self.wrap / 2 { offset -= Self.wrap; v -= Self.wrap }
+            if v - l < -(Self.wrap / 2) { v += Self.wrap }
+            else if v - l > Self.wrap / 2 { v -= Self.wrap }
         }
-        last = v
-        return Double(v) / 90000.0
+        return v
     }
 }
 
@@ -251,13 +262,15 @@ public final class TSPlayer: @unchecked Sendable {
         case .video:
             if !videoEnabled { return }
             guard let v = video, v.pid == info.pid else { droppedPES += 1; return }
-            v.feed(pes.payload, pts: pes.pts, dts: pes.dts)
+            let (pts, dts) = unwrapTimestamps(pes)
+            v.feed(pes.payload, pts: pts, dts: dts)
         case .audio:
             guard let a = audio, a.pid == info.pid else { droppedPES += 1; return }
             if a.streamType == 0x0F, let mode = AACChannelMode.detect(adts: pes.payload) {
                 observeChannelMode(mode == .dualMono)
             }
-            a.feed(pes.payload, pts: pes.pts, dts: pes.dts)
+            let (pts, dts) = unwrapTimestamps(pes)
+            a.feed(pes.payload, pts: pts, dts: dts)
         case .caption:
             let languages = captions.languages
             let changed = captions.feed(pes.payload)
@@ -271,6 +284,11 @@ public final class TSPlayer: @unchecked Sendable {
             guard superimpose.feed(pes.payload) else { return }
             enqueueCaption(pes, superimpose: true, superimpose.frame)
         }
+    }
+
+    private func unwrapTimestamps(_ pes: PESPacket) -> (Int64?, Int64?) {
+        let pts = pes.pts.map { unwrap.ticks($0) }
+        return (pts, pes.dts.map { unwrap.peek($0) })
     }
 
     // MARK: - Dual mono
@@ -299,7 +317,7 @@ public final class TSPlayer: @unchecked Sendable {
 
     private func enqueueCaption(_ pes: PESPacket, superimpose: Bool, _ frame: CaptionFrame) {
         // No PTS (asynchronous PES, usual for superimpose) → show as soon as possible.
-        let t = pes.pts.map { unwrap.seconds($0) } ?? -.infinity
+        let t = pes.pts.map { Double(unwrap.peek($0)) / 90000 } ?? -.infinity
         pendingCaptions.append((t, superimpose, frame))
         if pendingCaptions.count > 64 { pendingCaptions.removeFirst(pendingCaptions.count - 64) }
     }
@@ -360,12 +378,12 @@ public final class TSPlayer: @unchecked Sendable {
 
     private func presentVideo(_ pb: CVPixelBuffer, _ pts: Int64?) {
         guard let pts else { return }
-        presenter.enqueueVideo(pb, seconds: unwrap.seconds(pts))
+        presenter.enqueueVideo(pb, seconds: Double(pts) / 90000) // already unwrapped
     }
 
     private func presentAudio(_ s: UnsafePointer<Float>, _ frames: Int, _ ch: Int, _ rate: Int, _ pts: Int64?) {
         guard let pts else { return }
-        presenter.enqueueAudio(s, frames: frames, channels: ch, sampleRate: rate, seconds: unwrap.seconds(pts))
+        presenter.enqueueAudio(s, frames: frames, channels: ch, sampleRate: rate, seconds: Double(pts) / 90000)
     }
 
     private func tickStatus() {

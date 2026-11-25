@@ -47,12 +47,16 @@ import TSCore
         var nextAudioPTS: Int64?
         var firstVideoPTS: Int64?
         var lastVideoPTS: Int64?
+        /// Video frames whose PTS did not move forward by less than a second.
+        var videoJumps = 0
         var videoCodec = ""
     }
 
+    /// Timestamps are unwrapped before decoding, as `TSPlayer` does.
     static func decode(_ url: URL, hardware: Bool, deinterlace: DeinterlaceMode) throws -> Result {
         let data = try Data(contentsOf: url)
         let demux = TSDemuxer()
+        var unwrap = PTSUnwrapper()
         var video: MediaDecoder?
         var audio: MediaDecoder?
         var r = Result()
@@ -68,6 +72,7 @@ import TSCore
                                  d[kCVImageBufferPixelAspectRatioVerticalSpacingKey as String] ?? 0)
                     }
                     if r.firstVideoPTS == nil { r.firstVideoPTS = pts }
+                    if let last = r.lastVideoPTS, let pts, !(pts > last && pts - last < 90000) { r.videoJumps += 1 }
                     r.lastVideoPTS = pts
                 }
                 r.videoCodec = video?.description ?? ""
@@ -89,8 +94,8 @@ import TSCore
         }
         demux.onPES = { track, _, pes in
             switch track {
-            case .video: video?.feed(pes.payload, pts: pes.pts, dts: pes.dts)
-            case .audio: audio?.feed(pes.payload, pts: pes.pts, dts: pes.dts)
+            case .video: video?.feed(pes.payload, pts: pes.pts.map { unwrap.ticks($0) }, dts: pes.dts.map { unwrap.peek($0) })
+            case .audio: audio?.feed(pes.payload, pts: pes.pts.map { unwrap.ticks($0) }, dts: pes.dts.map { unwrap.peek($0) })
             case .caption, .superimpose: break
             }
         }
@@ -127,6 +132,22 @@ import TSCore
         #expect(r.audioGaps == 0)
     }
 
+    @Test(.enabled(if: ffmpeg != nil)) func timestampsAcross33BitWrap() throws {
+        // Starts 0.3 s before the 33-bit PTS wrap (2^33 / 90 kHz ≈ 95443.7 s; the muxer adds 1.4 s).
+        // bwdif's field times are interpolated between frames, which used to straddle the wrap.
+        let url = try Self.makeTS("mpeg2wrap", [
+            "-f", "lavfi", "-i", "testsrc2=size=720x480:rate=30000/1001",
+            "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000", "-t", "2",
+            "-vf", "setfield=tff", "-c:v", "mpeg2video", "-b:v", "4M", "-flags", "+ilme+ildct",
+            "-c:a", "aac", "-ac", "2", "-output_ts_offset", "95442",
+        ])
+        let r = try Self.decode(url, hardware: false, deinterlace: .fieldRate)
+        #expect(r.frames > 100, "frames: \(r.frames)")
+        #expect(r.videoJumps == 0)
+        #expect(r.audioGaps == 0)
+        #expect((r.lastVideoPTS ?? 0) > PTSUnwrapper.wrap, "the stream crossed the wrap")
+    }
+
     @Test(.enabled(if: ffmpeg != nil)) func mpeg2InterlacedDeinterlacedToFrameRate() throws {
         let url = try Self.makeTS("mpeg2i-30p", [
             "-f", "lavfi", "-i", "testsrc2=size=1440x1080:rate=30000/1001", "-t", "3",
@@ -156,9 +177,16 @@ import TSCore
 
     @Test func ptsUnwrap() {
         var u = PTSUnwrapper()
-        let wrap: Int64 = 1 << 33
-        let a = u.seconds(wrap - 90000)
-        let b = u.seconds(45000) // crossed the 33-bit wrap
-        #expect(abs((b - a) - 1.5) < 1e-9)
+        let wrap = PTSUnwrapper.wrap
+        let a = u.ticks(wrap - 90000)
+        let b = u.ticks(45000) // crossed the 33-bit wrap
+        #expect(b - a == 135000)
+        // Reordered frames and a DTS just before the wrap stay on the same timeline.
+        #expect(u.ticks(wrap - 3003) == wrap - 3003)
+        #expect(u.peek(wrap - 6006) == wrap - 6006)
+        #expect(u.ticks(48000) == wrap + 48000)
+        // A bogus caption PTS half a wrap away does not move the timeline.
+        _ = u.peek(wrap / 2 + 48000)
+        #expect(u.ticks(51000) == wrap + 51000)
     }
 }
