@@ -441,7 +441,11 @@ public struct CaptionScreen: Equatable, Sendable {
         var n = 0
         while n < times {
             ensurePosition()
-            if x + cellW > areaX + areaW + 0.5 { newLine() }
+            if x + cellW > areaX + areaW + 0.5 {
+                // RPC 0 stops at the end of the line (area widths need not be a multiple of the cell).
+                if toEndOfLine && n > 0 { break }
+                newLine()
+            }
             let (sx, sy) = scale
             let g = CaptionGlyph(content: content, x: x, y: y - cellH, width: cellW, height: cellH,
                                  charWidth: charW * sx, charHeight: charH * sy,

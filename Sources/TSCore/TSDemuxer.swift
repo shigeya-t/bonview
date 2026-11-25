@@ -93,6 +93,9 @@ public final class TSDemuxer {
     private var nit: NIT?
     private struct PFKey: Hashable { var onid, tsid, sid: UInt16; var following: Bool }
     private var pfEvents: [PFKey: EventInfo?] = [:]
+    /// Services whose p/f arrived on the H-EIT PID: the M-EIT / L-EIT copies of them (fewer
+    /// descriptors, e.g. no audio components) are then ignored.
+    private var hEITServices: Set<EITServiceKey> = []
 
     private static let nitPID: UInt16 = 0x0010
     private static let sdtPID: UInt16 = 0x0011
@@ -120,6 +123,7 @@ public final class TSDemuxer {
         hasNIT = false
         nit = nil
         pfEvents.removeAll()
+        hEITServices.removeAll()
         presentEvent = nil
         followingEvent = nil
         stats = DemuxStats()
@@ -235,6 +239,8 @@ public final class TSDemuxer {
             if changed { rebuildServices() }
         case 0x4E where Self.eitPIDs.contains(pid), 0x4F where Self.eitPIDs.contains(pid):
             guard let eit = EIT(s), eit.sectionNumber <= 1 else { return }
+            let svc = EITServiceKey(onid: eit.originalNetworkID, tsid: eit.transportStreamID, sid: eit.serviceID)
+            if pid == EITServiceKey.hEITPID { hEITServices.insert(svc) } else if hEITServices.contains(svc) { return }
             let ev = eit.events.first
             let key = PFKey(onid: eit.originalNetworkID, tsid: eit.transportStreamID, sid: eit.serviceID, following: eit.sectionNumber == 1)
             if pfEvents[key] != .some(ev) {

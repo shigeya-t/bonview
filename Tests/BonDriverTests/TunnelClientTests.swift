@@ -18,6 +18,13 @@ import Testing
         #expect(cfg.sendRecvTimeout == 10)
     }
 
+    @Test func nonPositiveTimeoutsKeepDefaults() throws {
+        // 0 would have meant no send/receive timeout at all (a silent server blocks forever).
+        let cfg = try TunnelConfig.parse("ADDRESS=host\nORIGIN=X\nCONNECT_TIMEOUT=0\nSEND_RECV_TIMEOUT=-1\n")
+        #expect(cfg.connectTimeout == 5)
+        #expect(cfg.sendRecvTimeout == 5)
+    }
+
     @Test func normalize() {
         #expect(TunnelConfig.normalizeOrigin("BonDriver_PT3-T.dll") == "PT3-T")
         #expect(TunnelConfig.normalizeOrigin("PT3-T") == "PT3-T")
@@ -57,6 +64,23 @@ import Testing
         client.release()
         #expect(server.handshakes == ["Crea:Mock-T"])
         #expect(server.commands.last == "Rele")
+    }
+
+    @Test func releaseDoesNotWaitForHungServer() throws {
+        let server = try MockTunnelServer()
+        server.start()
+        defer { server.stop() }
+        var cfg = TunnelConfig(address: "127.0.0.1", port: server.port, origin: "Mock-T")
+        cfg.sendRecvTimeout = 20
+        let client = try TunnelClient.connect(config: cfg)
+        try client.openTuner()
+        #expect(try client.setChannel(space: 0, channel: 0) == .tuned)
+        server.stalled = true
+        usleep(200_000) // the pump is now waiting for a GetTsStream reply
+        let start = Date()
+        client.release()
+        // Not 20 s per command: the pump's read is cut and Close / Release time out quickly.
+        #expect(Date().timeIntervalSince(start) < Double(TunnelClient.releaseTimeout) * 2 + 1)
     }
 
     @Test func reconnectsAndRepeatsCommand() throws {

@@ -237,8 +237,10 @@ public final class EPGCollector: @unchecked Sendable {
     private var _lastNewSchedule: Date?
 
     private struct SectionID: Hashable {
-        var tableID: UInt8, serviceID: UInt16, tsid: UInt16, onid: UInt16, section: UInt8
+        var pid: UInt16, tableID: UInt8, serviceID: UInt16, tsid: UInt16, onid: UInt16, section: UInt8
     }
+    /// Services seen on the H-EIT PID; their M-EIT / L-EIT copies are ignored.
+    private var hEITServices: Set<EITServiceKey> = []
 
     private static let pids: Set<UInt16> = [0x0012, 0x0026, 0x0027, 0x0014]
 
@@ -284,20 +286,23 @@ public final class EPGCollector: @unchecked Sendable {
         splitter.split(data) { p in
             guard !p.transportError, p.scramblingControl == 0, Self.pids.contains(p.pid), let payload = p.payload else { return }
             var asm = sections.removeValue(forKey: p.pid) ?? SectionAssembler() // keep the buffer uniquely referenced
-            asm.push(payload, unitStart: p.payloadUnitStart) { section($0) }
+            asm.push(payload, unitStart: p.payloadUnitStart) { section($0, pid: p.pid) }
             sections[p.pid] = asm
         }
     }
 
-    private func section(_ s: [UInt8]) {
+    private func section(_ s: [UInt8], pid: UInt16) {
         switch s[0] {
         case 0x70, 0x73:
             if let t = TOT.time(s) { _time = t }
         case 0x4E...0x6F:
-            guard s.count >= 18 else { return }
+            // section_syntax_indicator: without it the CRC was not checked (see SectionHeader).
+            guard s.count >= 18, s[1] & 0x80 != 0 else { return }
             let crc = UInt32(s[s.count - 4]) << 24 | UInt32(s[s.count - 3]) << 16 | UInt32(s[s.count - 2]) << 8 | UInt32(s[s.count - 1])
-            let id = SectionID(tableID: s[0], serviceID: s.u16(3), tsid: s.u16(8), onid: s.u16(10), section: s[6])
+            let id = SectionID(pid: pid, tableID: s[0], serviceID: s.u16(3), tsid: s.u16(8), onid: s.u16(10), section: s[6])
             if s[0] == 0x4E { _actualTSID = id.tsid }
+            let svc = EITServiceKey(onid: id.onid, tsid: id.tsid, sid: id.serviceID)
+            if pid == EITServiceKey.hEITPID { hEITServices.insert(svc) } else if hEITServices.contains(svc) { return }
             if seen[id] == crc { return }
             seen[id] = crc
             guard let eit = EIT(s) else { return }
@@ -307,4 +312,11 @@ public final class EPGCollector: @unchecked Sendable {
             break
         }
     }
+}
+
+/// A service in EIT sections, for preferring the H-EIT (PID 0x0012) over the M-EIT (0x0026) and
+/// L-EIT (0x0027) of terrestrial broadcasts, which repeat some services with fewer descriptors.
+struct EITServiceKey: Hashable, Sendable {
+    static let hEITPID: UInt16 = 0x0012
+    var onid, tsid, sid: UInt16
 }

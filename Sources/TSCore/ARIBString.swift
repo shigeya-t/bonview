@@ -259,8 +259,16 @@ public enum ARIBString {
                 while j + 1 < b.count && !(b[j] == 0x95 && b[j + 1] == 0x4F) { j += 1 }
                 return j + 2 - i
             case 0x98: return 2 // RPC
-            case 0x9D: // TIME
-                return i + 1 < b.count && b[i + 1] == 0x20 ? 3 : 2
+            case 0x9D: // TIME: 0x20 P1 (wait), 0x28 P2 (mode), 0x29 P3… ending in 0x40–0x43 (time)
+                guard i + 1 < b.count else { return 1 }
+                switch b[i + 1] {
+                case 0x20, 0x28: return 3
+                case 0x29:
+                    var j = i + 2
+                    while j < b.count && !(0x40...0x43).contains(b[j]) { j += 1 }
+                    return j + 1 - i
+                default: return 2
+                }
             case 0x9B: // CSI: parameters terminated by a final byte 0x40–0x7E (after 0x20)
                 var j = i + 1
                 while j < b.count && !(b[j] >= 0x40 && b[j] <= 0x7E && j > i + 1 && b[j - 1] == 0x20) { j += 1 }

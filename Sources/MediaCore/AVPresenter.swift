@@ -13,11 +13,22 @@ public final class AVPresenter: @unchecked Sendable {
     private let synchronizer = AVSampleBufferRenderSynchronizer()
 
     /// Initial buffering for jitter absorption.
-    public var latency: Double = 0.4
+    public var latency: Double {
+        get { lock.lock(); defer { lock.unlock() }; return _latency }
+        set { lock.lock(); _latency = newValue; lock.unlock() }
+    }
     /// If more than this is buffered ahead of the clock, skip forward.
-    public var maxBuffered: Double = 2.5
+    public var maxBuffered: Double {
+        get { lock.lock(); defer { lock.unlock() }; return _maxBuffered }
+        set { lock.lock(); _maxBuffered = newValue; lock.unlock() }
+    }
 
+    // The synchronizer's rate is only changed on the thread that enqueues samples (the player
+    // queue); other threads only flag a re-anchor, so a stop cannot land after a new anchor.
     private let lock = NSLock()
+    private var _latency = 0.4
+    private var _maxBuffered = 2.5
+    private var needsReanchor = false
     private var anchored = false
     private var hasAudio = false
     private var lastAudioEnd: Double?
@@ -26,7 +37,11 @@ public final class AVPresenter: @unchecked Sendable {
     private var videoFormat: CMVideoFormatDescription?
     private var frames = FrameHistory<CVPixelBuffer>()
 
-    public private(set) var videoDisplaySize: CGSize = .zero
+    public var videoDisplaySize: CGSize {
+        lock.lock(); defer { lock.unlock() }
+        return _videoDisplaySize
+    }
+    private var _videoDisplaySize: CGSize = .zero
     public var onVideoSizeChanged: ((CGSize) -> Void)?
 
     public init() {
@@ -48,14 +63,10 @@ public final class AVPresenter: @unchecked Sendable {
 
     private var flushObserver: NSObjectProtocol?
 
-    /// Stop the clock and wait for the next audio to anchor again (keeps the picture and queued video).
+    /// Stop the clock and wait for the next audio to anchor again (keeps the picture and queued
+    /// video). Any thread: done by the next `enqueueAudio`.
     private func reanchor() {
-        lock.lock()
-        let was = anchored
-        anchored = false
-        lastAudioEnd = nil
-        lock.unlock()
-        if was { synchronizer.setRate(0, time: .zero) }
+        lock.lock(); needsReanchor = true; lock.unlock()
     }
 
     public var volume: Float {
@@ -78,6 +89,7 @@ public final class AVPresenter: @unchecked Sendable {
         lock.lock()
         frames.keepCurrent(clock: anchored ? now : nil)
         anchored = false
+        needsReanchor = false
         lastAudioEnd = nil
         lock.unlock()
         synchronizer.setRate(0, time: .zero)
@@ -110,7 +122,7 @@ public final class AVPresenter: @unchecked Sendable {
         if anchored { return }
         if hasAudio && !isAudio { return }
         anchored = true
-        synchronizer.setRate(1, time: CMTime(seconds: t - latency, preferredTimescale: 90000))
+        synchronizer.setRate(1, time: CMTime(seconds: t - _latency, preferredTimescale: 90000))
     }
 
     // MARK: - Video
@@ -123,10 +135,11 @@ public final class AVPresenter: @unchecked Sendable {
             videoFormat = fmt
             if let fmt {
                 let size = CMVideoFormatDescriptionGetPresentationDimensions(fmt, usePixelAspectRatio: true, useCleanAperture: true)
-                if size != videoDisplaySize {
-                    videoDisplaySize = size
-                    onVideoSizeChanged?(size)
-                }
+                lock.lock()
+                let changed = size != _videoDisplaySize
+                _videoDisplaySize = size
+                lock.unlock()
+                if changed { onVideoSizeChanged?(size) }
             }
         }
         guard let fmt = videoFormat else { return }
@@ -182,20 +195,29 @@ public final class AVPresenter: @unchecked Sendable {
         lock.lock()
         if anchored {
             let clock = now
-            if end < clock {
+            // A jump in the audio timeline (discontinuity not signalled by the source): video
+            // queued for the old timeline would hold the picture until the clock got there.
+            let jumped = lastAudioEnd.map { abs(t - $0) > 1.0 } ?? false
+            if needsReanchor {
+                // The system flushed the audio renderer (route change, interruption).
+                anchored = false
+            } else if end < clock {
                 // Underrun: the clock overtook our data (network stall). Re-buffer from here.
                 anchored = false
-            } else if t - clock > maxBuffered + latency {
+            } else if t - clock > _maxBuffered + _latency {
                 // Too far ahead (sender clock faster than ours / burst). Jump forward.
                 anchored = false
             }
             if !anchored {
+                if jumped { self.frames.keepCurrent(clock: clock) }
                 lock.unlock()
                 synchronizer.setRate(0, time: .zero)
                 audioRenderer.flush()
+                if jumped { displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: false, completionHandler: nil) }
                 lock.lock()
             }
         }
+        needsReanchor = false
         anchorIfNeeded(at: t, isAudio: true)
         lastAudioEnd = end
         lock.unlock()

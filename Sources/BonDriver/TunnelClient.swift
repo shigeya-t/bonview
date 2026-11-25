@@ -14,15 +14,32 @@ import Foundation
 /// command with the same sequence number; the server answers repeats from its cache.
 public final class TunnelClient: BonDriver, @unchecked Sendable {
     public let config: TunnelConfig
-    public var tsHandler: ((Data) -> Void)?
-    public var errorHandler: ((BonDriverError) -> Void)?
+    /// Called on the polling thread. May be set while streaming (lock-protected).
+    public var tsHandler: ((Data) -> Void)? {
+        get { handlerLock.lock(); defer { handlerLock.unlock() }; return _tsHandler }
+        set { handlerLock.lock(); _tsHandler = newValue; handlerLock.unlock() }
+    }
+    public var errorHandler: ((BonDriverError) -> Void)? {
+        get { handlerLock.lock(); defer { handlerLock.unlock() }; return _errorHandler }
+        set { handlerLock.lock(); _errorHandler = newValue; handlerLock.unlock() }
+    }
+    private let handlerLock = NSLock()
+    private var _tsHandler: ((Data) -> Void)?
+    private var _errorHandler: ((BonDriverError) -> Void)?
     /// IBonDriver version reported by the server (1–3).
     public private(set) var interfaceVersion: UInt32 = 0
 
     static let maxTsBuf = 481_280
 
     private let lock = NSRecursiveLock()
-    private var socket: TCPSocket?
+    /// Used under `lock`; also read under `stateLock` by `release` (to cut a read that hangs).
+    private var socket: TCPSocket? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _socket }
+        set { stateLock.lock(); _socket = newValue; stateLock.unlock() }
+    }
+    private var _socket: TCPSocket?
+    /// How long releasing waits for each reply (and for a GetTsStream in progress) before giving up.
+    static let releaseTimeout = 3
     private var sessionID: UInt32 = 0
     private var sequence: UInt32 = 0
     private var failed = false
@@ -120,16 +137,27 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     /// Send a command and read its reply with `read`, reconnecting once on failure (same sequence number).
     private func transact<T>(_ cmd: String, _ p1: UInt32 = 0, _ p2: UInt32 = 0, read: (TCPSocket) throws -> T) throws -> T {
         lock.lock()
-        defer { lock.unlock() }
+        var notify = false
+        // The error handler runs after the lock is released (it may call back into the client).
+        defer {
+            lock.unlock()
+            if notify { errorHandler?(.disconnected) }
+        }
         stateLock.lock()
-        let isFailed = failed
+        let isFailed = failed, isReleased = released
         stateLock.unlock()
         if isFailed { throw BonDriverError.disconnected }
         sequence &+= 1
         var lastError: Error = BonDriverError.disconnected
-        for attempt in 0..<2 {
+        // While releasing, don't reconnect: closing must not wait for a second connect timeout.
+        for attempt in 0..<(isReleased ? 1 : 2) {
             do {
-                if attempt > 0 { try handshake(create: false) }
+                if attempt > 0 {
+                    // Released meanwhile (the socket was shut down to end a hung read): don't reconnect.
+                    stateLock.lock(); let releasing = released; stateLock.unlock()
+                    if releasing { break }
+                    try handshake(create: false)
+                }
                 try write(cmd, p1, p2)
                 guard let s = socket else { throw BonDriverError.disconnected }
                 return try read(s)
@@ -139,7 +167,7 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
                 socket = nil
             }
         }
-        markFailed()
+        notify = markFailed()
         throw (lastError as? BonDriverError) ?? .disconnected
     }
 
@@ -166,12 +194,13 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
         }
     }
 
-    private func markFailed() {
+    /// Returns whether the error should be reported (first failure, not while releasing).
+    private func markFailed() -> Bool {
         stateLock.lock()
         let first = !failed && !released
         failed = true
         stateLock.unlock()
-        if first { errorHandler?(.disconnected) }
+        return first
     }
 
     // MARK: - TS pump (GetTsStream polling)
@@ -214,12 +243,24 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     private func stopPump() {
         guard let p = pump else { return }
         pump = nil
-        if p != Thread.current { pumpDone.wait() }
+        if p == Thread.current { return }
+        stateLock.lock(); let releasing = released; stateLock.unlock()
+        if releasing, pumpDone.wait(timeout: .now() + .seconds(Self.releaseTimeout)) == .timedOut {
+            // The server stopped answering: end the read now instead of after the full timeout.
+            socket?.shutdown()
+        } else if releasing {
+            return
+        }
+        pumpDone.wait()
     }
 
     // MARK: - IBonDriver
 
     public func openTuner() throws {
+        stateLock.lock()
+        let alreadyOpen = tunerOpen
+        stateLock.unlock()
+        if alreadyOpen { return } // a second pump thread would never be joined
         guard try dword("Open") != 0 else { throw BonDriverError.rejected("OpenTuner") }
         if interfaceVersion >= 2, let name = try? string("GTun") {
             stateLock.lock(); _tunerName = name; stateLock.unlock()
@@ -250,11 +291,15 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     }
 
     public func release() {
+        // Check and set at once: a second call returns, and failures while releasing are not
+        // reported as errors.
         stateLock.lock()
         if released { stateLock.unlock(); return }
+        released = true
         stateLock.unlock()
+        // Close and Release must not each wait the full send/receive timeout for a silent server.
+        socket?.setTimeouts(Self.releaseTimeout)
         closeTuner()
-        stateLock.lock(); released = true; stateLock.unlock()
         lock.lock()
         // Any unknown command makes the server release the BonDriver and reply 0.
         sequence &+= 1

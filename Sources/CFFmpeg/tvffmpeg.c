@@ -134,6 +134,7 @@ static int open_codec(TVDecoder *d) {
     int ret = avcodec_open2(d->ctx, d->codec, NULL);
     if (ret < 0) return ret;
     d->parser = av_parser_init(id);
+    if (!d->parser) return AVERROR_DECODER_NOT_FOUND;
     snprintf(d->desc, sizeof d->desc, "%s (%s)", d->codec->name, d->hwActive ? "VideoToolbox" : "software");
     return 0;
 }
@@ -273,6 +274,12 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
     if (ret < 0) goto fail;
     AVFilterInOut *outputs = avfilter_inout_alloc();
     AVFilterInOut *inputs = avfilter_inout_alloc();
+    if (!outputs || !inputs) {
+        avfilter_inout_free(&inputs);
+        avfilter_inout_free(&outputs);
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
     outputs->name = av_strdup("in");
     outputs->filter_ctx = d->src;
     outputs->pad_idx = 0;
@@ -281,6 +288,12 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
     inputs->filter_ctx = d->sink;
     inputs->pad_idx = 0;
     inputs->next = NULL;
+    if (!outputs->name || !inputs->name) {
+        avfilter_inout_free(&inputs);
+        avfilter_inout_free(&outputs);
+        ret = AVERROR(ENOMEM);
+        goto fail;
+    }
     const char *spec = d->deinterlace == TV_DEINTERLACE_FRAME_RATE
         ? "bwdif=mode=send_frame:parity=auto:deint=interlaced"
         : "bwdif=mode=send_field:parity=auto:deint=interlaced";
