@@ -595,7 +595,8 @@ final class AppModel {
             }
             let passive = self?.passiveEPG
             router.set { player.feed($0); passive?.feed($0) }
-            let cancelled = scanner.isCancelled
+            // Lost connection: like a cancel, the partial result does not replace the saved one.
+            let cancelled = scanner.isCancelled || scanner.failure != nil
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.scanner = nil

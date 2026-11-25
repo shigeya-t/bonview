@@ -126,6 +126,13 @@ public final class ChannelScanner: @unchecked Sendable {
         demuxLock.lock(); demux.feed(data); demuxLock.unlock()
     }
 
+    /// Why the scan stopped early (connection lost / no reply), nil if it ran to the end or was cancelled.
+    public var failure: BonDriverError? {
+        cancelLock.lock(); defer { cancelLock.unlock() }
+        return _failure
+    }
+    private var _failure: BonDriverError?
+
     public var isCancelled: Bool {
         cancelLock.lock(); defer { cancelLock.unlock() }
         return _cancelled
@@ -136,13 +143,30 @@ public final class ChannelScanner: @unchecked Sendable {
         let channels = spaces.flatMap { s in s.channels.map { (s.name, $0) } }
         var found: [ScannedChannel] = []
         var previousTSID: UInt16?
+        cancelLock.lock(); _failure = nil; cancelLock.unlock()
         for (i, (spaceName, ch)) in channels.enumerated() {
             if isCancelled { break }
             onEvent?(.started(ch, index: i, total: channels.count))
-            guard (try? driver.setChannel(space: ch.space, channel: ch.index)) == .tuned else {
+            let tuned: Bool
+            do {
+                tuned = try driver.setChannel(space: ch.space, channel: ch.index) == .tuned
+            } catch let e as BonDriverError {
+                switch e {
+                case .rejected: tuned = false // no such channel on this tuner
+                default:
+                    // The connection is gone: the remaining channels would all come out empty.
+                    cancelLock.lock(); _failure = e; cancelLock.unlock()
+                    return found
+                }
+            } catch {
+                tuned = false
+            }
+            guard tuned else {
                 onEvent?(.empty(ch))
                 continue
             }
+            // Drop what the server buffered for the previous channel.
+            driver.purgeTsStream()
             // Data queued before SetChannel returned may belong to the previous channel.
             demuxLock.lock(); demux = TSDemuxer(); demuxLock.unlock()
 

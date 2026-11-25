@@ -58,14 +58,20 @@ struct PlayerScreen: View {
                 }
             }
             .backgroundPreferenceValue(PictureSlotKey.self) { anchor in
+                // Full-screen slots reach into the safe area; so does this reader, so the picture
+                // (and its taps) are not limited to the safe area.
                 GeometryReader { g in
                     let r = anchor.map { g[$0] } ?? .zero
                     picture
                         .contentShape(Rectangle())
-                        .onTapGesture { if full { setControlsVisible(!controlsVisible) } }
+                        // Only full screen toggles the controls; otherwise the picture's own buttons
+                        // (再接続, 設定を開く) get every tap.
+                        .gesture(TapGesture().onEnded { setControlsVisible(!controlsVisible) },
+                                 including: full ? .all : .subviews)
                         .frame(width: r.width, height: r.height)
                         .position(x: r.midX, y: r.midY)
                 }
+                .ignoresSafeArea()
             }
         }
         .sheet(item: $sheet) { s in

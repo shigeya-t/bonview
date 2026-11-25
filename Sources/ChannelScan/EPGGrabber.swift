@@ -84,7 +84,7 @@ public final class EPGGrabber: @unchecked Sendable {
                 let now = ProcessInfo.processInfo.systemUptime
                 if isComplete(ch) { break }
                 if let last = collector.lastNewScheduleSection {
-                    if Date().timeIntervalSince(last) >= options.stallTimeout { break }
+                    if ProcessInfo.processInfo.systemUptime - last >= options.stallTimeout { break }
                 } else if now - start >= options.noDataTimeout {
                     break
                 }

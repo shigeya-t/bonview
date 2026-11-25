@@ -215,9 +215,15 @@ public final class TSDemuxer {
         case 0x00 where pid == 0:
             guard let newPAT = PAT(s), newPAT != pat else { return }
             if let old = pat, old.transportStreamID != newPAT.transportStreamID {
+                // Another stream (files joined together): what was learnt about the old one goes.
+                // The NIT's stream list is kept (it covers the network); applyNIT below picks the
+                // new stream's entry if it is there.
                 sdtServices.removeAll()
                 presentEvent = nil
                 followingEvent = nil
+                originalNetworkID = nil
+                remoteControlKeyID = nil
+                hasNIT = false
             }
             pat = newPAT
             transportStreamID = newPAT.transportStreamID

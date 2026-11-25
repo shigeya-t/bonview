@@ -459,6 +459,7 @@ static void decode_packet(TVDecoder *d, AVPacket *pkt) {
 int tv_decoder_feed(TVDecoder *d, const uint8_t *data, int size, int64_t pts, int64_t dts) {
     int64_t p = pts == TV_NOPTS ? AV_NOPTS_VALUE : pts;
     int64_t q = dts == TV_NOPTS ? AV_NOPTS_VALUE : dts;
+    if (!d || (!data && size > 0)) return AVERROR(EINVAL);
     if (!d->parser || size <= 0) return size < 0 ? AVERROR(EINVAL) : 0;
     if (size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) return AVERROR(EINVAL);
     if (d->inCap < size + AV_INPUT_BUFFER_PADDING_SIZE) {
