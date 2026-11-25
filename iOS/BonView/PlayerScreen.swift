@@ -1,3 +1,4 @@
+import AVKit
 import BonDriver
 import MediaCore
 import SwiftUI
@@ -10,6 +11,7 @@ import TSCore
 /// on channel / programme changes and on tap.
 struct PlayerScreen: View {
     @Environment(AppModel.self) private var model
+    @Environment(PictureInPicture.self) private var pip: PictureInPicture?
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var sheet: Sheet?
     @State private var controlsVisible = true
@@ -65,14 +67,17 @@ struct PlayerScreen: View {
         ZStack {
             Color.black
             VideoView(displayLayer: model.player.presenter.displayLayer)
-            if model.showCaptions {
-                switch model.captionStyle {
-                case .broadcast: CaptionPlaneView(frame: model.captionFrame, videoSize: model.nativeVideoSize)
-                case .simple: CaptionOverlay(lines: model.captionFrame.lines, videoSize: model.nativeVideoSize)
+            // While the picture is in the PiP window, the system draws a placeholder here.
+            if pip?.isActive != true {
+                if model.showCaptions {
+                    switch model.captionStyle {
+                    case .broadcast: CaptionPlaneView(frame: model.captionFrame, videoSize: model.nativeVideoSize)
+                    case .simple: CaptionOverlay(lines: model.captionFrame.lines, videoSize: model.nativeVideoSize)
+                    }
                 }
+                // Superimpose (emergency / news flashes) is shown regardless of the caption setting.
+                CaptionPlaneView(frame: model.superimposeFrame, videoSize: model.nativeVideoSize)
             }
-            // Superimpose (emergency / news flashes) is shown regardless of the caption setting.
-            CaptionPlaneView(frame: model.superimposeFrame, videoSize: model.nativeVideoSize)
             StateOverlay(sheet: $sheet)
         }
         .clipped()
@@ -198,9 +203,22 @@ private struct FullScreenInfo: View {
     }
 }
 
+/// System audio output picker (AirPlay speakers, Bluetooth, ...).
+private struct AirPlayButton: UIViewRepresentable {
+    func makeUIView(context: Context) -> AVRoutePickerView {
+        let v = AVRoutePickerView()
+        v.prioritizesVideoDevices = false
+        v.tintColor = .tintColor
+        return v
+    }
+
+    func updateUIView(_ uiView: AVRoutePickerView, context: Context) {}
+}
+
 /// Channel up/down, mute, captions, guide and settings.
 struct ControlBar: View {
     @Environment(AppModel.self) private var model
+    @Environment(PictureInPicture.self) private var pip: PictureInPicture?
     @Binding var sheet: PlayerScreen.Sheet?
     var isFullScreen: Bool
     var toggleFullScreen: () -> Void
@@ -221,6 +239,14 @@ struct ControlBar: View {
                 model.showCaptions.toggle()
             }
             .foregroundStyle(model.showCaptions ? Color.accentColor : Color.secondary)
+            if PictureInPicture.isSupported, let pip {
+                button(pip.isActive ? "ピクチャ・イン・ピクチャを終了" : "ピクチャ・イン・ピクチャ",
+                       pip.isActive ? "pip.exit" : "pip.enter") { pip.toggle() }
+                    .disabled(!pip.isPossible && !pip.isActive)
+            }
+            AirPlayButton()
+                .frame(width: 40, height: 40)
+                .accessibilityLabel("AirPlay")
             button("番組表", model.isGrabbingEPG ? "calendar.badge.clock" : "calendar") { sheet = .guide }
             button("設定", "gearshape") { sheet = .settings }
             button(isFullScreen ? "全画面を終了" : "全画面",

@@ -83,6 +83,8 @@ public final class TSPlayer: @unchecked Sendable {
 
     // Options (read on the player queue).
     private var hardwareDecoding = true
+    /// False while nothing is on screen (iOS background audio): video PES are dropped undecoded.
+    private var videoEnabled = true
     private var deinterlace = DeinterlaceMode.fieldRate
     private var dualMono: DualMonoMode = .both
     /// Dual-mono detection with hysteresis: the flag flips after this many agreeing frames.
@@ -178,6 +180,21 @@ public final class TSPlayer: @unchecked Sendable {
         }
     }
 
+    /// Stop / resume decoding video (audio and captions continue). Resuming waits for the next
+    /// key frame without disturbing the audio clock.
+    public func setVideoEnabled(_ on: Bool) {
+        queue.async { [self] in
+            guard videoEnabled != on else { return }
+            videoEnabled = on
+            if let sel = demuxer.selection { makeDecoders(sel, keepClock: true) }
+        }
+    }
+
+    /// Re-anchor the presentation clock (audio interruption, output route change).
+    public func resync() {
+        queue.async { [self] in presenter.flush() }
+    }
+
     public func setDeinterlace(_ mode: DeinterlaceMode) {
         queue.async { [self] in
             guard deinterlace != mode else { return }
@@ -194,18 +211,18 @@ public final class TSPlayer: @unchecked Sendable {
         main { $0.onSelectionChanged?(sel) }
     }
 
-    private func makeDecoders(_ sel: StreamSelection) {
+    private func makeDecoders(_ sel: StreamSelection, keepClock: Bool = false) {
         if sel.caption?.pid != captionPID || sel.superimpose?.pid != superimposePID {
             captionPID = sel.caption?.pid
             superimposePID = sel.superimpose?.pid
             resetCaptions()
         }
         var flushed = false
-        if let v = sel.video {
+        if let v = sel.video, videoEnabled {
             if video?.pid != v.pid || video?.streamType != v.streamType {
                 video = MediaDecoder(streamType: v.streamType, pid: v.pid, hardware: hardwareDecoding, deinterlace: deinterlace)
                 video?.onVideo = { [weak self] pb, pts in self?.presentVideo(pb, pts) }
-                flushed = true
+                flushed = !keepClock
             }
         } else {
             video = nil
@@ -223,13 +240,16 @@ public final class TSPlayer: @unchecked Sendable {
         }
         presenter.setExpectsAudio(audio != nil)
         if flushed { presenter.flush() }
-        status.videoCodec = video?.description ?? (sel.video.map { "\($0.codecName) (未対応)" } ?? "")
+        if videoEnabled {
+            status.videoCodec = video?.description ?? (sel.video.map { "\($0.codecName) (未対応)" } ?? "")
+        }
         status.audioCodec = audio?.description ?? ""
     }
 
     private func handlePES(_ track: TSDemuxer.Track, _ info: ElementaryStreamInfo, _ pes: PESPacket) {
         switch track {
         case .video:
+            if !videoEnabled { return }
             guard let v = video, v.pid == info.pid else { droppedPES += 1; return }
             v.feed(pes.payload, pts: pes.pts, dts: pes.dts)
         case .audio:

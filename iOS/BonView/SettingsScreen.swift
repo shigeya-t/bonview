@@ -9,6 +9,7 @@ struct SettingsScreen: View {
     @Environment(\.dismiss) private var dismiss
     @State private var importing: Importing?
     @State private var importError: String?
+    @AppStorage("backgroundPlayback") private var backgroundPlayback = true
 
     private enum Importing {
         case config, tsFile
@@ -60,6 +61,7 @@ struct SettingsScreen: View {
                 }
 
                 Section("再生") {
+                    Toggle("バックグラウンドで音声を再生", isOn: $backgroundPlayback)
                     Toggle("H.264 / HEVC をハードウェアデコード", isOn: $model.hardwareDecoding)
                     Picker("インターレース解除", selection: $model.deinterlace) {
                         Text("オフ").tag(DeinterlaceMode.off)
