@@ -45,6 +45,10 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>LAN上のBonDriverProxyサーバーに接続してテレビ放送を受信します。</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

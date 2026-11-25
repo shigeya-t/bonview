@@ -35,6 +35,27 @@ public final class AVPresenter: @unchecked Sendable {
         synchronizer.addRenderer(displayLayer.sampleBufferRenderer)
         synchronizer.addRenderer(audioRenderer)
         synchronizer.delaysRateChangeUntilHasSufficientMediaData = false
+        // The system flushes the audio renderer itself on output route changes (AirPlay, headphones)
+        // and interruptions. Re-anchor so the clock does not run on without audio.
+        flushObserver = NotificationCenter.default.addObserver(
+            forName: .AVSampleBufferAudioRendererWasFlushedAutomatically, object: audioRenderer, queue: nil
+        ) { [weak self] _ in self?.reanchor() }
+    }
+
+    deinit {
+        if let flushObserver { NotificationCenter.default.removeObserver(flushObserver) }
+    }
+
+    private var flushObserver: NSObjectProtocol?
+
+    /// Stop the clock and wait for the next audio to anchor again (keeps the picture and queued video).
+    private func reanchor() {
+        lock.lock()
+        let was = anchored
+        anchored = false
+        lastAudioEnd = nil
+        lock.unlock()
+        if was { synchronizer.setRate(0, time: .zero) }
     }
 
     public var volume: Float {
