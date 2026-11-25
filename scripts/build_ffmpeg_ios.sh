@@ -107,7 +107,8 @@ build_slice() {
 </dict>
 </plist>
 EOF
-    codesign --force --sign - "$fw/$name" >/dev/null 2>&1
+    # Sign the bundle (seals Info.plist and the headers too), ad hoc; Xcode re-signs it when embedding.
+    codesign --force --sign - "$fw" 2>/dev/null || { echo "codesign failed: $fw" >&2; exit 1; }
   done
   rm -rf "$SRC_DIR/ios-$sdk"
 }
