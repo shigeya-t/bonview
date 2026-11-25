@@ -21,10 +21,9 @@ struct BonViewApp: App {
                 .frame(minWidth: 480, minHeight: 300)
                 .onAppear {
                     AppDelegate.openURL = { [model] in model.openFile($0) }
-                    // `BonView file.ts` plays the file; otherwise reconnect to the last BonDriver.
-                    if let path = CommandLine.arguments.dropFirst().first(where: { $0.hasSuffix(".ts") || $0.hasSuffix(".m2ts") }) {
-                        model.openFile(URL(fileURLWithPath: path))
-                    } else if let url = AppDelegate.pendingURL {
+                    // `BonView file.ts` (or a file opened at launch) plays the file, once; otherwise
+                    // and when the window is reopened, reconnect to the last BonDriver.
+                    if let url = AppDelegate.takeLaunchFile() {
                         model.openFile(url)
                     } else if model.currentProfile != nil, model.state == .idle {
                         model.connect()
@@ -53,6 +52,21 @@ struct BonViewApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static var openURL: ((URL) -> Void)?
     static var pendingURL: URL?
+    private static var launchArgumentsUsed = false
+
+    /// The file to play when the main window appears: from the command line or opened before the
+    /// window existed. Returned only once.
+    static func takeLaunchFile() -> URL? {
+        if !launchArgumentsUsed {
+            launchArgumentsUsed = true
+            if let path = CommandLine.arguments.dropFirst().first(where: { $0.hasSuffix(".ts") || $0.hasSuffix(".m2ts") }) {
+                pendingURL = nil
+                return URL(fileURLWithPath: path)
+            }
+        }
+        defer { pendingURL = nil }
+        return pendingURL
+    }
 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard let url = urls.first else { return }

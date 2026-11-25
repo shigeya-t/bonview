@@ -40,9 +40,7 @@ extension AppModel {
                 Result {
                     guard let data = FrameSnapshot.encode(image, as: format) else { throw CocoaError(.fileWriteUnknown) }
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    let url = ScreenshotName.unique(folder.appendingPathComponent(name))
-                    try data.write(to: url, options: .withoutOverwriting)
-                    return url
+                    return try ScreenshotName.write(data, to: folder.appendingPathComponent(name))
                 }
             }.value
             switch result {
@@ -102,17 +100,20 @@ enum ScreenshotName {
         return "\(name.prefix(80))_\(formatter.string(from: date)).\(ext)"
     }
 
-    /// `name.png`, or `name-2.png`, `name-3.png`… if it already exists.
-    static func unique(_ url: URL) -> URL {
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: url.path) else { return url }
+    /// Writes to `name.png`, or `name-2.png`, `name-3.png`… if that exists. The name is taken by
+    /// the write itself (no overwrite), so two saves in the same second can't pick the same one.
+    static func write(_ data: Data, to url: URL) throws -> URL {
         let base = url.deletingPathExtension().lastPathComponent, ext = url.pathExtension
         let dir = url.deletingLastPathComponent()
-        var n = 2
-        while true {
-            let candidate = dir.appendingPathComponent("\(base)-\(n)").appendingPathExtension(ext)
-            if !fm.fileExists(atPath: candidate.path) { return candidate }
-            n += 1
+        for n in 1...1000 {
+            let candidate = n == 1 ? url : dir.appendingPathComponent("\(base)-\(n)").appendingPathExtension(ext)
+            do {
+                try data.write(to: candidate, options: .withoutOverwriting)
+                return candidate
+            } catch CocoaError.fileWriteFileExists {
+                continue
+            }
         }
+        throw CocoaError(.fileWriteFileExists)
     }
 }
