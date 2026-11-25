@@ -40,14 +40,14 @@ struct PlayerScreen: View {
                         ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
                     }
                     Divider()
-                    PanelView().frame(width: min(380, geo.size.width * 0.36))
+                    PanelView(openSettings: { sheet = .settings }).frame(width: min(380, geo.size.width * 0.36))
                 }
             } else {
                 VStack(spacing: 0) {
                     picture.aspectRatio(16 / 9, contentMode: .fit)
                     ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
                     Divider()
-                    PanelView()
+                    PanelView(openSettings: { sheet = .settings })
                 }
             }
         }
