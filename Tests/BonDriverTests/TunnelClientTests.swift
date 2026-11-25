@@ -18,6 +18,13 @@ import Testing
         #expect(cfg.sendRecvTimeout == 10)
     }
 
+    @Test func nonPositiveTimeoutsKeepDefaults() throws {
+        // 0 would have meant no send/receive timeout at all (a silent server blocks forever).
+        let cfg = try TunnelConfig.parse("ADDRESS=host\nORIGIN=X\nCONNECT_TIMEOUT=0\nSEND_RECV_TIMEOUT=-1\n")
+        #expect(cfg.connectTimeout == 5)
+        #expect(cfg.sendRecvTimeout == 5)
+    }
+
     @Test func normalize() {
         #expect(TunnelConfig.normalizeOrigin("BonDriver_PT3-T.dll") == "PT3-T")
         #expect(TunnelConfig.normalizeOrigin("PT3-T") == "PT3-T")

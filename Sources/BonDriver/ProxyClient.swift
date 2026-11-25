@@ -11,8 +11,18 @@ public final class ProxyClient: BonDriver, @unchecked Sendable {
     public static let defaultTunerName = "BonDriver_Proxy"
 
     public let config: ProxyConfig
-    public var tsHandler: ((Data) -> Void)?
-    public var errorHandler: ((BonDriverError) -> Void)?
+    /// Called on the receiver thread. May be set while streaming (lock-protected).
+    public var tsHandler: ((Data) -> Void)? {
+        get { handlerLock.lock(); defer { handlerLock.unlock() }; return _tsHandler }
+        set { handlerLock.lock(); _tsHandler = newValue; handlerLock.unlock() }
+    }
+    public var errorHandler: ((BonDriverError) -> Void)? {
+        get { handlerLock.lock(); defer { handlerLock.unlock() }; return _errorHandler }
+        set { handlerLock.lock(); _errorHandler = newValue; handlerLock.unlock() }
+    }
+    private let handlerLock = NSLock()
+    private var _tsHandler: ((Data) -> Void)?
+    private var _errorHandler: ((BonDriverError) -> Void)?
     /// Request timeout. SetChannel can take a few seconds on real tuners.
     public var requestTimeout: TimeInterval = 15
 
@@ -150,18 +160,29 @@ public final class ProxyClient: BonDriver, @unchecked Sendable {
         response = nil
         cond.unlock()
 
-        try socket.send(packet.encoded())
+        do {
+            try socket.send(packet.encoded())
+        } catch {
+            cond.lock(); pendingCommand = nil; cond.unlock()
+            throw error
+        }
 
         let deadline = Date().addingTimeInterval(requestTimeout)
         cond.lock()
-        defer { cond.unlock() }
         while response == nil && failure == nil {
             if !cond.wait(until: deadline) { break }
         }
-        if let r = response { return r }
+        let reply = response, failed = failure
         pendingCommand = nil
-        if let f = failure { throw f }
-        throw BonDriverError.timeout(String(describing: packet.proxyCommand.map { "\($0)" } ?? "\(packet.command)"))
+        cond.unlock()
+        if let reply { return reply }
+        if let failed { throw failed }
+        // Replies carry no request ID: a late one would be taken as the answer to the next request
+        // with the same command. The connection can't be trusted any more, so it fails.
+        let error = BonDriverError.timeout(packet.proxyCommand.map { "\($0)" } ?? "\(packet.command)")
+        fail(error)
+        socket.shutdown() // ends the receiver; later calls throw `error`
+        throw error
     }
 
     /// Fire-and-forget commands (CloseTuner, Release).
@@ -199,8 +220,11 @@ public final class ProxyClient: BonDriver, @unchecked Sendable {
     }
 
     public func release() {
+        // Check and set at once: a second call returns, and a disconnect while releasing is not
+        // reported as an error.
         stateLock.lock()
         let alreadyReleased = released
+        released = true
         stateLock.unlock()
         if alreadyReleased { return }
         closeTuner()

@@ -11,6 +11,8 @@ final class MockProxyServer: @unchecked Sendable {
     var spaces: [(String, [String])] = [("UHF", ["NHK総合", "Eテレ"]), ("BS", ["BS朝日"])]
     var acceptedDriver = "BonDriver_Mock.dll"
     var lockedChannel = false
+    /// Commands the server reads but never answers (a stuck server).
+    var unanswered: Set<ProxyCommand> = []
     var tsChunk = Data(repeating: 0x47, count: 188 * 4)
     var signal: Float = 24.5
 
@@ -56,6 +58,7 @@ final class MockProxyServer: @unchecked Sendable {
         while let p = try? s.readPacket(maxBody: 1 << 20) {
             lock.lock(); _received.append(p); lock.unlock()
             guard let cmd = p.proxyCommand else { continue }
+            if unanswered.contains(cmd) { continue }
             switch cmd {
             case .selectBonDriver:
                 let name = String(decoding: p.body.prefix { $0 != 0 }, as: UTF8.self)

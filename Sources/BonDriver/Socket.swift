@@ -3,7 +3,9 @@ import Foundation
 
 /// Minimal blocking TCP socket used by the proxy client (and the test server).
 final class TCPSocket: @unchecked Sendable {
-    private(set) var fd: Int32
+    /// -1 once closed. Changed under `writeLock`, so a send never writes to a descriptor number
+    /// that `close` has freed (and the system may have handed to another socket).
+    private var fd: Int32
     private let writeLock = NSLock()
 
     init(fd: Int32) {
@@ -39,7 +41,9 @@ final class TCPSocket: @unchecked Sendable {
             var r = Darwin.connect(fd, a.pointee.ai_addr, a.pointee.ai_addrlen)
             if r != 0 && errno == EINPROGRESS {
                 var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
-                r = poll(&pfd, 1, Int32(timeout * 1000))
+                // Clamped: the value comes from user settings and must fit an Int32 of milliseconds.
+                let ms = Int32(min(max(timeout, 0.1), 3600) * 1000)
+                repeat { r = poll(&pfd, 1, ms) } while r < 0 && errno == EINTR
                 if r == 1 {
                     var err: Int32 = 0
                     var len = socklen_t(MemoryLayout<Int32>.size)
@@ -62,10 +66,10 @@ final class TCPSocket: @unchecked Sendable {
         throw BonDriverError.connectionFailed("\(host):\(port) (\(lastError))")
     }
 
-    /// SO_SNDTIMEO / SO_RCVTIMEO. A timed-out read or write throws `.disconnected`.
+    /// SO_SNDTIMEO / SO_RCVTIMEO. A timed-out read or write throws `.disconnected`. Clamped to
+    /// 1 s … 1 h: no timeout would let a silent server block the caller forever.
     func setTimeouts(_ seconds: Int) {
-        guard seconds > 0 else { return }
-        var tv = timeval(tv_sec: seconds, tv_usec: 0)
+        var tv = timeval(tv_sec: min(max(seconds, 1), 3600), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
@@ -79,6 +83,7 @@ final class TCPSocket: @unchecked Sendable {
     func send(_ data: Data) throws {
         writeLock.lock()
         defer { writeLock.unlock() }
+        guard fd >= 0 else { throw BonDriverError.disconnected }
         try data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) in
             var off = 0
             while off < buf.count {
@@ -120,15 +125,18 @@ final class TCPSocket: @unchecked Sendable {
         return ProxyPacket(command: head[1], option: head[2], body: body)
     }
 
-    /// Unblocks a reader thread and closes the descriptor.
+    /// Unblocks a reader thread (the descriptor stays open until `close`).
     func shutdown() {
+        writeLock.lock(); defer { writeLock.unlock() }
         if fd >= 0 { Darwin.shutdown(fd, SHUT_RDWR) }
     }
 
+    /// Call once no thread is reading any more (readers use the descriptor without the lock).
     func close() {
-        if fd >= 0 {
-            Darwin.close(fd)
-            fd = -1
-        }
+        writeLock.lock()
+        let f = fd
+        fd = -1
+        writeLock.unlock()
+        if f >= 0 { Darwin.close(f) }
     }
 }

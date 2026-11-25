@@ -110,6 +110,47 @@ import Testing
         }
     }
 
+    @Test func requestTimeoutFailsTheConnection() throws {
+        // Replies carry no request ID, so after a timeout a late reply could answer the next
+        // request: the connection is failed instead of being reused.
+        let server = try MockProxyServer()
+        server.unanswered = [.purgeTsStream]
+        server.start()
+        defer { server.stop() }
+        let client = try ProxyClient.connect(config: ProxyConfig(address: "127.0.0.1", port: server.port, bonDriver: "BonDriver_Mock.dll"))
+        let errors = Errors()
+        client.errorHandler = { errors.add($0) }
+        client.requestTimeout = 0.3
+        try client.openTuner()
+        client.purgeTsStream()
+        #expect(errors.all.count == 1)
+        if case .timeout = errors.all.first {} else { Issue.record("expected a timeout, got \(errors.all)") }
+        #expect(throws: BonDriverError.self) { _ = try client.setChannel(space: 0, channel: 0) }
+        client.release()
+        #expect(errors.all.count == 1)
+    }
+
+    @Test func releaseIsQuietAndIdempotent() throws {
+        let server = try MockProxyServer()
+        server.start()
+        defer { server.stop() }
+        let client = try ProxyClient.connect(config: ProxyConfig(address: "127.0.0.1", port: server.port, bonDriver: "BonDriver_Mock.dll"))
+        let errors = Errors()
+        client.errorHandler = { errors.add($0) }
+        try client.openTuner()
+        client.release() // the server closes the connection on Release: not an error
+        client.release()
+        usleep(100_000)
+        #expect(errors.all.isEmpty)
+    }
+
+    @Test func hugeConnectTimeoutDoesNotTrap() {
+        // CONNECT_TIMEOUT comes from a user's .ini; milliseconds must fit an Int32.
+        #expect(throws: BonDriverError.self) {
+            _ = try TCPSocket.connect(host: "127.0.0.1", port: 9, timeout: 1e12)
+        }
+    }
+
     @Test func channelLocked() throws {
         let server = try MockProxyServer()
         server.lockedChannel = true
@@ -127,4 +168,11 @@ final class Received: @unchecked Sendable {
     private var total = 0
     func add(_ d: Data) { lock.lock(); total += d.count; lock.unlock() }
     var count: Int { lock.lock(); defer { lock.unlock() }; return total }
+}
+
+final class Errors: @unchecked Sendable {
+    private let lock = NSLock()
+    private var list: [BonDriverError] = []
+    func add(_ e: BonDriverError) { lock.lock(); list.append(e); lock.unlock() }
+    var all: [BonDriverError] { lock.lock(); defer { lock.unlock() }; return list }
 }

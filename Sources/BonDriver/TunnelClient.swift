@@ -14,8 +14,18 @@ import Foundation
 /// command with the same sequence number; the server answers repeats from its cache.
 public final class TunnelClient: BonDriver, @unchecked Sendable {
     public let config: TunnelConfig
-    public var tsHandler: ((Data) -> Void)?
-    public var errorHandler: ((BonDriverError) -> Void)?
+    /// Called on the polling thread. May be set while streaming (lock-protected).
+    public var tsHandler: ((Data) -> Void)? {
+        get { handlerLock.lock(); defer { handlerLock.unlock() }; return _tsHandler }
+        set { handlerLock.lock(); _tsHandler = newValue; handlerLock.unlock() }
+    }
+    public var errorHandler: ((BonDriverError) -> Void)? {
+        get { handlerLock.lock(); defer { handlerLock.unlock() }; return _errorHandler }
+        set { handlerLock.lock(); _errorHandler = newValue; handlerLock.unlock() }
+    }
+    private let handlerLock = NSLock()
+    private var _tsHandler: ((Data) -> Void)?
+    private var _errorHandler: ((BonDriverError) -> Void)?
     /// IBonDriver version reported by the server (1–3).
     public private(set) var interfaceVersion: UInt32 = 0
 
@@ -120,14 +130,20 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     /// Send a command and read its reply with `read`, reconnecting once on failure (same sequence number).
     private func transact<T>(_ cmd: String, _ p1: UInt32 = 0, _ p2: UInt32 = 0, read: (TCPSocket) throws -> T) throws -> T {
         lock.lock()
-        defer { lock.unlock() }
+        var notify = false
+        // The error handler runs after the lock is released (it may call back into the client).
+        defer {
+            lock.unlock()
+            if notify { errorHandler?(.disconnected) }
+        }
         stateLock.lock()
-        let isFailed = failed
+        let isFailed = failed, isReleased = released
         stateLock.unlock()
         if isFailed { throw BonDriverError.disconnected }
         sequence &+= 1
         var lastError: Error = BonDriverError.disconnected
-        for attempt in 0..<2 {
+        // While releasing, don't reconnect: closing must not wait for a second connect timeout.
+        for attempt in 0..<(isReleased ? 1 : 2) {
             do {
                 if attempt > 0 { try handshake(create: false) }
                 try write(cmd, p1, p2)
@@ -139,7 +155,7 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
                 socket = nil
             }
         }
-        markFailed()
+        notify = markFailed()
         throw (lastError as? BonDriverError) ?? .disconnected
     }
 
@@ -166,12 +182,13 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
         }
     }
 
-    private func markFailed() {
+    /// Returns whether the error should be reported (first failure, not while releasing).
+    private func markFailed() -> Bool {
         stateLock.lock()
         let first = !failed && !released
         failed = true
         stateLock.unlock()
-        if first { errorHandler?(.disconnected) }
+        return first
     }
 
     // MARK: - TS pump (GetTsStream polling)
@@ -220,6 +237,10 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     // MARK: - IBonDriver
 
     public func openTuner() throws {
+        stateLock.lock()
+        let alreadyOpen = tunerOpen
+        stateLock.unlock()
+        if alreadyOpen { return } // a second pump thread would never be joined
         guard try dword("Open") != 0 else { throw BonDriverError.rejected("OpenTuner") }
         if interfaceVersion >= 2, let name = try? string("GTun") {
             stateLock.lock(); _tunerName = name; stateLock.unlock()
@@ -250,11 +271,13 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     }
 
     public func release() {
+        // Check and set at once: a second call returns, and failures while releasing are not
+        // reported as errors.
         stateLock.lock()
         if released { stateLock.unlock(); return }
+        released = true
         stateLock.unlock()
         closeTuner()
-        stateLock.lock(); released = true; stateLock.unlock()
         lock.lock()
         // Any unknown command makes the server release the BonDriver and reply 0.
         sequence &+= 1
