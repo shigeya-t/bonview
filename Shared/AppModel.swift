@@ -6,6 +6,7 @@ import ChannelScan
 import Foundation
 import MediaCore
 import Observation
+import os
 import TSCore
 
 /// Application state. Mutated on the main thread only; BonDriver calls run on `driverQueue`.
@@ -257,6 +258,8 @@ final class AppModel {
     @ObservationIgnored private var fileSource: TSFileSource?
     @ObservationIgnored private var signalTimer: Timer?
     @ObservationIgnored private(set) var generation = 0
+    /// Number of the newest `tune` request (read on `driverQueue` too).
+    @ObservationIgnored private let latestTune = OSAllocatedUnfairLock(initialState: 0)
     @ObservationIgnored private let router = TSRouter()
     @ObservationIgnored private var scanner: ChannelScanner?
 
@@ -400,6 +403,10 @@ final class AppModel {
         player.stop()
         spaces = []
         currentChannel = nil
+        isTuning = false
+        // A recorded file's clock would otherwise keep the guide on its date.
+        broadcastTime = nil
+        audioIndex = 0
         services = []
         selection = nil
         presentEvent = nil
@@ -457,10 +464,16 @@ final class AppModel {
         currentChannel = ch
         isTuning = true
         channelLocked = false
+        audioIndex = 0
         let preferred = service ?? Preferences.lastService(for: profile.id, space: ch.space, channel: ch.index)
         let player = self.player
         let gen = generation
+        // Zapping quickly queues several tunes: only the newest one is carried out, and only its
+        // completion ends `isTuning`.
+        let tuneID = latestTune.withLock { $0 += 1; return $0 }
+        let latestTune = self.latestTune
         driverQueue.async { [weak self] in
+            guard latestTune.withLock({ $0 }) == tuneID else { return }
             let result: Result<SetChannelResult, Error> = Result { try d.setChannel(space: ch.space, channel: ch.index) }
             if case .success(.tuned) = result {
                 // Anything queued after this point belongs to the new channel.
@@ -469,7 +482,7 @@ final class AppModel {
                 player.selectService(preferred)
             }
             DispatchQueue.main.async {
-                guard let self, self.generation == gen else { return }
+                guard let self, self.generation == gen, self.latestTune.withLock({ $0 }) == tuneID else { return }
                 self.isTuning = false
                 switch result {
                 case .success(.tuned):
@@ -513,6 +526,8 @@ final class AppModel {
     /// Scan the given tuning spaces. Results replace the previous ones for those spaces only.
     func startScan(spaces selected: Set<UInt32>) {
         guard let d = driver, let profile = currentProfile, !isScanning else { return }
+        // The scan retunes the server's tuners; a guide grab would fight it for them.
+        cancelEPGGrab()
         let targets = spaces.filter { selected.contains($0.index) }
         guard !targets.isEmpty else { return }
         let scanner = ChannelScanner()
@@ -610,8 +625,18 @@ final class AppModel {
         state = .playingFile(url.lastPathComponent)
         player.reset()
         let src = TSFileSource(url: url, player: player)
-        src.onFinished = { [weak self] in
-            if case .playingFile = self?.state { self?.state = .idle }
+        src.onFinished = { [weak self, weak src] error in
+            // A reader stopped for an earlier file must not end the one playing now.
+            guard let self, let src, self.fileSource === src, case .playingFile = self.state else { return }
+            self.fileSource = nil
+            if let error {
+                self.player.stop()
+                self.state = .failed(error.localizedDescription)
+            } else {
+                // Show the captions still waiting for their time, then the last picture stays.
+                self.player.finishInput()
+                self.state = .idle
+            }
         }
         do {
             try src.start()

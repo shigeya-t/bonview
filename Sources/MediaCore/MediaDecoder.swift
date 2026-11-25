@@ -31,7 +31,9 @@ final class MediaDecoder {
     var onAudio: ((UnsafePointer<Float>, Int, Int, Int, Int64?) -> Void)?
 
     init?(streamType: UInt8, pid: UInt16, hardware: Bool, deinterlace: DeinterlaceMode) {
-        guard let d = tv_decoder_create(Int32(streamType), hardware ? 1 : 0, deinterlace.cValue) else { return nil }
+        // The FFmpeg dylibs are weak-linked: calling into a missing one would crash.
+        guard tv_ffmpeg_missing_libraries() == nil,
+              let d = tv_decoder_create(Int32(streamType), hardware ? 1 : 0, deinterlace.cValue) else { return nil }
         raw = d
         self.streamType = streamType
         self.pid = pid

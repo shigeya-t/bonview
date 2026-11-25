@@ -78,4 +78,30 @@ struct FrameSnapshotTests {
         let image = try #require(FrameSnapshot.cgImage(from: buffer))
         #expect(image.width == 1280 && image.height == 720)
     }
+
+    /// A 1920×1088 picture with a 1920×1080 clean aperture is saved at 1920×1080.
+    @Test func appliesCleanAperture() throws {
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 1920, 1088, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &pb)
+        let buffer = try #require(pb)
+        let aperture: [CFString: Any] = [kCVImageBufferCleanApertureWidthKey: 1920, kCVImageBufferCleanApertureHeightKey: 1080,
+                                         kCVImageBufferCleanApertureHorizontalOffsetKey: 0,
+                                         kCVImageBufferCleanApertureVerticalOffsetKey: -4]
+        CVBufferSetAttachment(buffer, kCVImageBufferCleanApertureKey, aperture as CFDictionary, .shouldPropagate)
+        #expect(FrameSnapshot.visibleRect(buffer) == CGRect(x: 0, y: 8, width: 1920, height: 1080))
+        let image = try #require(FrameSnapshot.cgImage(from: buffer))
+        #expect(image.width == 1920 && image.height == 1080)
+    }
+
+    /// A broken aspect ratio cannot ask for a huge image.
+    @Test func absurdPixelAspectRatioIsBounded() throws {
+        var pb: CVPixelBuffer?
+        CVPixelBufferCreate(nil, 1920, 1080, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, nil, &pb)
+        let buffer = try #require(pb)
+        let par: [CFString: Any] = [kCVImageBufferPixelAspectRatioHorizontalSpacingKey: 65535,
+                                    kCVImageBufferPixelAspectRatioVerticalSpacingKey: 1]
+        CVBufferSetAttachment(buffer, kCVImageBufferPixelAspectRatioKey, par as CFDictionary, .shouldPropagate)
+        #expect(FrameSnapshot.pixelAspectRatio(buffer) == 4)
+        #expect(FrameSnapshot.displaySize(buffer).width <= FrameSnapshot.maxWidth)
+    }
 }
