@@ -481,10 +481,20 @@ public enum AribTime {
 
     @inline(__always) static func bcd(_ b: UInt8) -> Int { Int(b >> 4) * 10 + Int(b & 0x0F) }
 
+    /// Two BCD digits, or nil when a nibble is not a digit or the value exceeds `max`.
+    static func bcd(_ b: UInt8, max: Int) -> Int? {
+        guard b >> 4 <= 9, b & 0x0F <= 9 else { return nil }
+        let v = bcd(b)
+        return v <= max ? v : nil
+    }
+
     /// 16-bit MJD + 24-bit BCD hh:mm:ss in JST. All-ones means "undefined".
     public static func date(mjdBCD b: [UInt8]) -> Date? {
         guard b.count == 5, !b.allSatisfy({ $0 == 0xFF }) else { return nil }
         let mjd = Int(b[0]) << 8 | Int(b[1])
+        // Corrupt data: the formula below is only valid from 1900-03-01 (MJD 15079).
+        guard mjd >= 15079, let hour = bcd(b[2], max: 23), let minute = bcd(b[3], max: 59),
+              let second = bcd(b[4], max: 60) else { return nil }
         // ETSI EN 300 468 Annex C
         let yp = Int((Double(mjd) - 15078.2) / 365.25)
         let mp = Int((Double(mjd) - 14956.1 - Double(Int(Double(yp) * 365.25))) / 30.6001)
@@ -494,9 +504,9 @@ public enum AribTime {
         c.year = 1900 + yp + k
         c.month = mp - 1 - k * 12
         c.day = day
-        c.hour = bcd(b[2])
-        c.minute = bcd(b[3])
-        c.second = bcd(b[4])
+        c.hour = hour
+        c.minute = minute
+        c.second = second
         c.timeZone = jst
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = jst
@@ -505,6 +515,7 @@ public enum AribTime {
 
     public static func duration(bcd b: [UInt8]) -> TimeInterval? {
         guard b.count == 3, !b.allSatisfy({ $0 == 0xFF }) else { return nil }
-        return TimeInterval(bcd(b[0]) * 3600 + bcd(b[1]) * 60 + bcd(b[2]))
+        guard let h = bcd(b[0], max: 99), let m = bcd(b[1], max: 59), let s = bcd(b[2], max: 59) else { return nil }
+        return TimeInterval(h * 3600 + m * 60 + s)
     }
 }

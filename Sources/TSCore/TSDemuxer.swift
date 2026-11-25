@@ -76,6 +76,8 @@ public final class TSDemuxer {
     public private(set) var remoteControlKeyID: UInt8?
     /// Whether the NIT entry for the current TS has been received.
     public private(set) var hasNIT = false
+    /// An SDT (actual) has been received since the last reset.
+    public var hasSDT: Bool { !sdtServices.isEmpty }
     public private(set) var presentEvent: EventInfo?
     public private(set) var followingEvent: EventInfo?
 
@@ -90,7 +92,9 @@ public final class TSDemuxer {
     private var pmtPIDs: [UInt16: UInt16] = [:] // PID → program number
     private var pmts: [UInt16: PMT] = [:]       // program number → PMT
     private var sdtServices: [UInt16: SDT.Service] = [:]
-    private var nit: NIT?
+    /// NIT transport stream entries collected from all sections (a multi-section NIT lists
+    /// different streams in each).
+    private var nitStreams: [UInt16: NIT.TransportStream] = [:]
     private struct PFKey: Hashable { var onid, tsid, sid: UInt16; var following: Bool }
     private var pfEvents: [PFKey: EventInfo?] = [:]
     /// Services whose p/f arrived on the H-EIT PID: the M-EIT / L-EIT copies of them (fewer
@@ -121,7 +125,7 @@ public final class TSDemuxer {
         originalNetworkID = nil
         remoteControlKeyID = nil
         hasNIT = false
-        nit = nil
+        nitStreams.removeAll()
         pfEvents.removeAll()
         hEITServices.removeAll()
         presentEvent = nil
@@ -152,6 +156,10 @@ public final class TSDemuxer {
         let pid = p.pid
         if pid == 0x1FFF { return }
 
+        if !p.hasPayload && p.discontinuityIndicator {
+            // Adaptation-field-only packet announcing a discontinuity: the next counter is new.
+            lastCC[pid] = nil
+        }
         if p.hasPayload {
             let cc = p.continuityCounter
             if let last = lastCC[pid], !p.discontinuityIndicator {
@@ -207,9 +215,15 @@ public final class TSDemuxer {
         case 0x00 where pid == 0:
             guard let newPAT = PAT(s), newPAT != pat else { return }
             if let old = pat, old.transportStreamID != newPAT.transportStreamID {
+                // Another stream (files joined together): what was learnt about the old one goes.
+                // The NIT's stream list is kept (it covers the network); applyNIT below picks the
+                // new stream's entry if it is there.
                 sdtServices.removeAll()
                 presentEvent = nil
                 followingEvent = nil
+                originalNetworkID = nil
+                remoteControlKeyID = nil
+                hasNIT = false
             }
             pat = newPAT
             transportStreamID = newPAT.transportStreamID
@@ -225,7 +239,7 @@ public final class TSDemuxer {
             rebuildServices()
         case 0x40 where pid == Self.nitPID:
             guard let n = NIT(s) else { return }
-            nit = n
+            for ts in n.transportStreams { nitStreams[ts.transportStreamID] = ts }
             applyNIT()
         case 0x42 where pid == Self.sdtPID:
             guard let sdt = SDT(s), transportStreamID == nil || sdt.transportStreamID == transportStreamID else { return }
@@ -261,10 +275,9 @@ public final class TSDemuxer {
         }
     }
 
-    /// Pick this TS's entry from the NIT (multi-section NITs: keep the matching section).
+    /// Pick this TS's entry from the NIT.
     private func applyNIT() {
-        guard let tsid = transportStreamID,
-              let entry = nit?.transportStreams.first(where: { $0.transportStreamID == tsid }) else { return }
+        guard let tsid = transportStreamID, let entry = nitStreams[tsid] else { return }
         remoteControlKeyID = entry.remoteControlKeyID
         hasNIT = true
     }

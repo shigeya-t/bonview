@@ -126,6 +126,13 @@ public final class ChannelScanner: @unchecked Sendable {
         demuxLock.lock(); demux.feed(data); demuxLock.unlock()
     }
 
+    /// Why the scan stopped early (connection lost / no reply), nil if it ran to the end or was cancelled.
+    public var failure: BonDriverError? {
+        cancelLock.lock(); defer { cancelLock.unlock() }
+        return _failure
+    }
+    private var _failure: BonDriverError?
+
     public var isCancelled: Bool {
         cancelLock.lock(); defer { cancelLock.unlock() }
         return _cancelled
@@ -135,31 +142,58 @@ public final class ChannelScanner: @unchecked Sendable {
     public func scan(_ driver: BonDriver, spaces: [TuningSpace], onEvent: ((Event) -> Void)? = nil) -> [ScannedChannel] {
         let channels = spaces.flatMap { s in s.channels.map { (s.name, $0) } }
         var found: [ScannedChannel] = []
+        var previousTSID: UInt16?
+        cancelLock.lock(); _failure = nil; cancelLock.unlock()
         for (i, (spaceName, ch)) in channels.enumerated() {
             if isCancelled { break }
             onEvent?(.started(ch, index: i, total: channels.count))
-            guard (try? driver.setChannel(space: ch.space, channel: ch.index)) == .tuned else {
+            let tuned: Bool
+            do {
+                tuned = try driver.setChannel(space: ch.space, channel: ch.index) == .tuned
+            } catch let e as BonDriverError {
+                switch e {
+                case .rejected: tuned = false // no such channel on this tuner
+                default:
+                    // The connection is gone: the remaining channels would all come out empty.
+                    cancelLock.lock(); _failure = e; cancelLock.unlock()
+                    return found
+                }
+            } catch {
+                tuned = false
+            }
+            guard tuned else {
                 onEvent?(.empty(ch))
                 continue
             }
+            // Drop what the server buffered for the previous channel.
+            driver.purgeTsStream()
             // Data queued before SetChannel returned may belong to the previous channel.
             demuxLock.lock(); demux = TSDemuxer(); demuxLock.unlock()
 
-            let start = Date()
+            let start = ProcessInfo.processInfo.systemUptime
             var result: ScannedChannel?
             while !isCancelled {
                 usleep(50_000)
-                let elapsed = Date().timeIntervalSince(start)
+                let elapsed = ProcessInfo.processInfo.systemUptime - start
                 demuxLock.lock()
-                let tsid = demux.transportStreamID
+                var tsid = demux.transportStreamID
+                if tsid != nil, tsid == previousTSID, elapsed < 1 {
+                    // Packets of the previous channel still in flight: start over.
+                    demux = TSDemuxer()
+                    tsid = nil
+                }
                 let onid = demux.originalNetworkID
                 let services = demux.services
                 let key = demux.remoteControlKeyID
                 let hasNIT = demux.hasNIT
+                let hasSDT = demux.hasSDT
                 demuxLock.unlock()
 
                 if let tsid {
-                    let named = !services.isEmpty && services.allSatisfy { !$0.name.isEmpty }
+                    // Data and one-seg services are often missing from the SDT: once it has
+                    // arrived, don't wait for their names until the timeout.
+                    let named = !services.isEmpty
+                        && (services.allSatisfy { !$0.name.isEmpty } || (hasSDT && elapsed >= 2))
                     let scanned = ScannedChannel(
                         space: ch.space, channel: ch.index, channelName: ch.name, spaceName: spaceName,
                         transportStreamID: tsid, originalNetworkID: onid, remoteControlKeyID: key,
@@ -175,6 +209,7 @@ public final class ChannelScanner: @unchecked Sendable {
             }
             if isCancelled { break }
             if let result {
+                previousTSID = result.transportStreamID
                 found.append(result)
                 onEvent?(.found(result))
             } else {

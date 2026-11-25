@@ -26,7 +26,9 @@ struct CaptionPlaneView: View {
     }
 
     private func draw(in ctx: inout GraphicsContext, rect: CGRect) {
-        guard !frame.glyphs.isEmpty else { return }
+        // A zero-sized plane or picture would give an infinite / singular transform.
+        guard !frame.glyphs.isEmpty, frame.planeWidth > 0, frame.planeHeight > 0,
+              rect.width > 0, rect.height > 0 else { return }
         let sx = rect.width / frame.planeWidth, sy = rect.height / frame.planeHeight
         func cellRect(_ g: CaptionGlyph) -> CGRect {
             CGRect(x: rect.minX + g.x * sx, y: rect.minY + g.y * sy, width: g.width * sx, height: g.height * sy)
@@ -59,6 +61,8 @@ struct CaptionPlaneView: View {
                 let cell = cellRect(g)
                 let box = CGRect(x: cell.midX - g.charWidth * sx / 2, y: cell.midY - g.charHeight * sy / 2,
                                  width: g.charWidth * sx, height: g.charHeight * sy)
+                // SSM 0;0 and the like: nothing to draw (and scaling by 0 is not invertible).
+                guard box.width >= 0.5, box.height >= 0.5 else { continue }
                 switch g.content {
                 case .text(let s):
                     guard !s.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
@@ -66,7 +70,12 @@ struct CaptionPlaneView: View {
                         .foregroundColor(g.foreground.color))
                     var c = layer
                     c.translateBy(x: box.midX, y: box.midY)
-                    c.scaleBy(x: box.width / max(box.height, 1), y: 1) // half-width (MSZ) / double-width
+                    // Squeeze / stretch a full-width character to the cell (MSZ: half, double width).
+                    // Characters the font already draws half-width (alphanumerics, half-width kana)
+                    // are only squeezed further when the cell is narrower than half (MSZ would
+                    // otherwise make them a quarter wide).
+                    let fullWidthScale = box.width / box.height
+                    c.scaleBy(x: Self.isHalfWidth(s) ? min(1, fullWidthScale * 2) : fullWidthScale, y: 1)
                     c.draw(text, at: .zero, anchor: .center)
                 case .drcs(let pattern):
                     if let image = DRCSImageCache.shared.image(pattern, color: g.foreground) {
@@ -75,6 +84,13 @@ struct CaptionPlaneView: View {
                 }
             }
         }
+    }
+}
+
+extension CaptionPlaneView {
+    /// Text the font draws at about half the em width.
+    static func isHalfWidth(_ s: String) -> Bool {
+        s.unicodeScalars.allSatisfy { $0.value < 0x0100 || (0xFF61...0xFF9F).contains($0.value) }
     }
 }
 

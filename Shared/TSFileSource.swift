@@ -10,7 +10,8 @@ final class TSFileSource: @unchecked Sendable {
     private var thread: Thread?
     private let lock = NSLock()
     private var running = false
-    var onFinished: (() -> Void)?
+    /// Main queue; the read error, or nil at the end of the file / after `stop`.
+    var onFinished: ((Error?) -> Void)?
 
     init(url: URL, player: TSPlayer) {
         self.url = url
@@ -36,8 +37,16 @@ final class TSFileSource: @unchecked Sendable {
             }
             let chunk = 188 * 256
             var pacer = PCRPacer()
+            var readError: Error?
             while let self, self.isRunning {
-                guard let data = try? handle.read(upToCount: chunk), !data.isEmpty else { break }
+                let data: Data
+                do {
+                    guard let d = try handle.read(upToCount: chunk), !d.isEmpty else { break }
+                    data = d
+                } catch {
+                    readError = error
+                    break
+                }
                 // Note: `player.feed` is asynchronous and `bufferedSeconds` only counts decoded
                 // audio, so the buffer alone can't pace the reader; the PCR can.
                 var wait = pacer.delay(for: data, now: ProcessInfo.processInfo.systemUptime)
@@ -58,7 +67,7 @@ final class TSFileSource: @unchecked Sendable {
                     if self.player.presenter.bufferedSeconds == 0 { usleep(8_000) }
                 }
             }
-            DispatchQueue.main.async { self?.onFinished?() }
+            DispatchQueue.main.async { [readError] in self?.onFinished?(readError) }
         }
         t.name = "TS file reader"
         thread = t

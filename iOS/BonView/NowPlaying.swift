@@ -183,8 +183,14 @@ final class NowPlaying {
                 try? await Task.sleep(for: .seconds(2))
                 guard let self, !Task.isCancelled, self.model.channelTitle == channel else { return }
                 if UIApplication.shared.applicationState == .background { continue }
-                guard let pb = self.model.player.presenter.currentFrame(),
-                      let cg = FrameSnapshot.cgImage(from: pb) else { continue }
+                // Right after a channel change the frozen picture of the previous channel is still
+                // the current frame: wait until the new stream plays (the clock is re-anchored).
+                guard !self.model.isTuning, self.model.player.presenter.clockSeconds != nil,
+                      let pb = self.model.player.presenter.currentFrame() else { continue }
+                // Core Image conversion off the main thread.
+                nonisolated(unsafe) let frame = pb
+                let cg = await Task.detached(priority: .utility) { FrameSnapshot.cgImage(from: frame) }.value
+                guard let cg, !Task.isCancelled, self.model.channelTitle == channel else { continue }
                 let image = UIImage(cgImage: cg)
                 self.artwork = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
                 self.artworkKey = channel

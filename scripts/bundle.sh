@@ -32,6 +32,8 @@ if [[ -z "${FFMPEG_PREFIX:-}" ]]; then
   scripts/build_ffmpeg.sh
   export FFMPEG_PREFIX="$PWD/build/ffmpeg"
 fi
+# Without a trailing slash: the rpath removed below must match the one the linker recorded.
+export FFMPEG_PREFIX="${FFMPEG_PREFIX%/}"
 # awk (not grep -v) exits 0 even when it filters everything, so pipefail reports only a failing build.
 swift build -c "$CONFIG" --product BonView 2>&1 | awk '!/ld: warning/'
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/BonView"
@@ -59,11 +61,16 @@ if (( ${#libs} )); then
     cp "$FFMPEG_PREFIX/lib/$lib" "$APP/Contents/Frameworks/$lib"
     sign "$APP/Contents/Frameworks/$lib"
   done
-  cp "$FFMPEG_PREFIX"/share/licenses/* "$LIC/FFmpeg/" 2>/dev/null || true
+  # The LGPL requires the licence text with the bundled libraries: don't ship without it.
+  lic=("$FFMPEG_PREFIX"/share/licenses/*(N))
+  (( ${#lic} )) || { echo "error: no FFmpeg licence files in $FFMPEG_PREFIX/share/licenses" >&2; exit 1; }
+  cp "${lic[@]}" "$LIC/FFmpeg/"
   FFV=$(cat "$FFMPEG_PREFIX/.version" 2>/dev/null || echo "")
   [[ -n "$FFV" ]] && echo "$FFV" > "$LIC/FFmpeg/VERSION"
   # Only load the bundled copies (and don't ship the build machine's path).
-  install_name_tool -delete_rpath "$FFMPEG_PREFIX/lib" "$APP/Contents/MacOS/BonView" 2>/dev/null || true
+  if otool -l "$APP/Contents/MacOS/BonView" | grep -q "path $FFMPEG_PREFIX/lib "; then
+    install_name_tool -delete_rpath "$FFMPEG_PREFIX/lib" "$APP/Contents/MacOS/BonView"
+  fi
   FFMPEG_CREDITS="<h3>FFmpeg ${FFV}</h3>
 <p>映像・音声のデコードに <a href=\"https://ffmpeg.org/\">FFmpeg</a> を LGPL 2.1 以降で使っています（GPL の部品は含みません）。<br>
 Contents/Frameworks の dylib は差し替えられます。ビルド設定は scripts/build_ffmpeg.sh にあります。<br>
@@ -82,7 +89,8 @@ fi
 if [[ -n "${ICLOUD_TEAM:-}" ]]; then
   # Same identifier as the iOS app ($(TeamIdentifierPrefix)<bundle id>), so they share one store.
   APP_ID="$ICLOUD_TEAM.$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
-  ENTITLEMENTS="$(dirname "$APP")/BonView.entitlements"
+  ENTITLEMENTS="$(mktemp -t BonView.entitlements)"
+  trap 'rm -f "$ENTITLEMENTS"' EXIT
   cat > "$ENTITLEMENTS" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -99,6 +107,5 @@ PLIST
 fi
 # Nested code (Contents/Frameworks) is already signed; sign the bundle last.
 sign "$APP"
-[[ -n "${ENTITLEMENTS:-}" ]] && rm -f "$ENTITLEMENTS"
-codesign --verify --strict "$APP"
+codesign --verify --deep --strict "$APP"
 echo "$APP"

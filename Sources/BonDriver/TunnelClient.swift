@@ -50,6 +50,8 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     private var _channel: UInt32?
     private var _tunerName = "BonDriver_Tunnel"
     private var tunerOpen = false
+    /// An `openTuner` is in progress (a second one waiting for the first would start a second pump).
+    private var opening = false
     private var released = false
     private var pump: Thread?
     private let pumpDone = DispatchSemaphore(value: 0)
@@ -208,7 +210,7 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     private func startPump() {
         let t = Thread { [weak self, pumpDone] in
             defer { pumpDone.signal() }
-            var lastSignal = Date.distantPast
+            var lastSignal = -Double.infinity // system uptime: unaffected by clock changes
             while let self, self.pumpRunning {
                 do {
                     let (data, remain) = try self.transact("GTsS") { s -> (Data, UInt32) in
@@ -218,8 +220,9 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
                         return (try s.readExactly(Int(n) - 4), remain)
                     }
                     if !data.isEmpty { self.tsHandler?(data) }
-                    if Date().timeIntervalSince(lastSignal) >= 1 {
-                        lastSignal = Date()
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - lastSignal >= 1 {
+                        lastSignal = now
                         let bits = try self.dword("GSig")
                         self.stateLock.lock(); self._signal = Float(bitPattern: bits); self.stateLock.unlock()
                     }
@@ -258,11 +261,13 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
 
     public func openTuner() throws {
         stateLock.lock()
-        let alreadyOpen = tunerOpen
+        let busy = tunerOpen || opening // a second pump thread would never be joined
+        if !busy { opening = true }
         stateLock.unlock()
-        if alreadyOpen { return } // a second pump thread would never be joined
+        if busy { return }
+        defer { stateLock.lock(); opening = false; stateLock.unlock() }
         guard try dword("Open") != 0 else { throw BonDriverError.rejected("OpenTuner") }
-        if interfaceVersion >= 2, let name = try? string("GTun") {
+        if interfaceVersion >= 2, let name = try string("GTun") {
             stateLock.lock(); _tunerName = name; stateLock.unlock()
         }
         stateLock.lock(); tunerOpen = true; stateLock.unlock()

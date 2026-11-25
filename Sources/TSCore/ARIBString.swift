@@ -20,6 +20,10 @@ public enum ARIBString {
         }
 
         static func graphic(_ f: UInt8, twoByte: Bool) -> Charset {
+            // Kanji, JIS kanji planes 1/2 and the additional symbols are 2-byte sets; the rest are
+            // 1-byte. A designation of the wrong width (broken data) must not shift the text.
+            let twoByteSets: Set<UInt8> = [0x42, 0x39, 0x3A, 0x3B]
+            guard twoByteSets.contains(f) == twoByte else { return .unknown(twoByte ? 2 : 1) }
             switch f {
             case 0x42: return .kanji
             case 0x4A, 0x36: return .alnum
@@ -67,7 +71,8 @@ public enum ARIBString {
     enum Token: Equatable {
         /// One character cell (captions) or a run of text.
         case text(String)
-        /// DRCS character: 1-byte sets → (F << 8) | c (F = 0x41…0x4F); DRCS-0 → c1 << 8 | c2.
+        /// DRCS character: 1-byte sets → (F << 8) | c (F = 0x41…0x4F); DRCS-0 → 0x8000 | c1 << 8 | c2
+        /// (`CaptionDRCS.drcs0Flag`; c1 overlaps the F range, so the flag keeps the two apart).
         case drcs(UInt16)
         case control(Control)
     }
@@ -254,7 +259,9 @@ public enum ARIBString {
             case 0x8B: return 2 // SZX
             case 0x92: // CDC
                 return i + 1 < b.count && b[i + 1] == 0x20 ? 3 : 2
-            case 0x95: // MACRO
+            case 0x95: // MACRO: 0x95 0x40/0x41 … 0x95 0x4F; a lone end (0x95 0x4F) is two bytes
+                guard i + 1 < b.count else { return 1 }
+                if b[i + 1] == 0x4F { return 2 }
                 var j = i + 2
                 while j + 1 < b.count && !(b[j] == 0x95 && b[j + 1] == 0x4F) { j += 1 }
                 return j + 2 - i
@@ -271,8 +278,11 @@ public enum ARIBString {
                 }
             case 0x9B: // CSI: parameters terminated by a final byte 0x40–0x7E (after 0x20)
                 var j = i + 1
-                while j < b.count && !(b[j] >= 0x40 && b[j] <= 0x7E && j > i + 1 && b[j - 1] == 0x20) { j += 1 }
-                return j + 1 - i
+                // Parameters are short; a CSI without its terminator (broken data) only drops
+                // the CSI byte instead of the rest of the string.
+                let limit = min(b.count, i + 64)
+                while j < limit && !(b[j] >= 0x40 && b[j] <= 0x7E && j > i + 1 && b[j - 1] == 0x20) { j += 1 }
+                return j < limit ? j + 1 - i : 1
             default: return 1
             }
         }
@@ -307,7 +317,7 @@ public enum ARIBString {
             case .drcs(let n, let f):
                 if captionMode {
                     let code = n == 1 ? UInt16(f) << 8 | UInt16(c1)
-                        : UInt16(c1) << 8 | UInt16(i + 1 < b.count ? b[i + 1] & mask : 0)
+                        : CaptionDRCS.drcs0Flag | UInt16(c1) << 8 | UInt16(i + 1 < b.count ? b[i + 1] & mask : 0)
                     if !out.isEmpty { tokens.append(.text(out)); out = "" }
                     tokens.append(.drcs(code))
                 } else {

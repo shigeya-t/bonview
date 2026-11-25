@@ -26,11 +26,11 @@ struct ProgramGuideView: View {
     #endif
 
     static let jst = TimeZone(identifier: "Asia/Tokyo")!
-    static var calendar: Calendar {
+    static let calendar: Calendar = {
         var c = Calendar(identifier: .gregorian)
         c.timeZone = jst
         return c
-    }
+    }()
 
     /// Start (04:00 JST) of the broadcast day containing `date`.
     static func broadcastDay(_ date: Date) -> Date {
@@ -43,26 +43,33 @@ struct ProgramGuideView: View {
     private var dayStart: Date { Self.calendar.date(byAdding: .day, value: dayOffset, to: Self.broadcastDay(now))! }
     private var dayEnd: Date { dayStart.addingTimeInterval(24 * 3600) }
 
-    private var spaces: [String] {
-        model.visibleEntries.map(\.channel.spaceName).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+    private static func spaces(_ entries: [AppModel.ScannedEntry]) -> [String] {
+        entries.map(\.channel.spaceName).reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
     }
 
-    private var currentSpace: String? { spaces.contains(spaceName) ? spaceName : spaces.first }
+    private func currentSpace(_ spaces: [String]) -> String? { spaces.contains(spaceName) ? spaceName : spaces.first }
 
-    /// Days that have data, from today.
+    /// Days that have data, from today. The last event's end is exclusive: a programme ending at
+    /// 04:00 does not open another (empty) broadcast day.
     private var dayCount: Int {
         guard let last = model.epg.dateRange?.upperBound else { return 1 }
-        let days = Self.calendar.dateComponents([.day], from: Self.broadcastDay(now), to: Self.broadcastDay(last)).day ?? 0
+        let days = Self.calendar.dateComponents([.day], from: Self.broadcastDay(now),
+                                                to: Self.broadcastDay(last.addingTimeInterval(-1))).day ?? 0
         return max(1, min(days + 1, 9))
     }
 
     var body: some View {
+        // Computed once per update (each is a pass over the channel list / the whole guide).
+        let entries = model.visibleEntries
+        let spaces = Self.spaces(entries)
+        let currentSpace = currentSpace(spaces)
+        let dayCount = dayCount
         VStack(spacing: 0) {
-            if model.visibleEntries.isEmpty {
+            if entries.isEmpty {
                 ContentUnavailableView("チャンネルがありません", systemImage: "list.bullet.rectangle",
                                        description: Text("番組表にはチャンネルスキャンの結果を使います。"))
             } else {
-                grid
+                grid(entries.filter { $0.channel.spaceName == currentSpace })
             }
             Divider()
             GuideStatusBar()
@@ -97,14 +104,14 @@ struct ProgramGuideView: View {
         .navigationTitle("番組表")
     }
 
-    private var grid: some View {
-        let entries = model.visibleEntries.filter { $0.channel.spaceName == currentSpace }
+    private func grid(_ entries: [AppModel.ScannedEntry]) -> some View {
         let height = 24 * 60 * Self.pointsPerMinute
         return ScrollViewReader { proxy in
             ScrollView([.horizontal, .vertical]) {
                 LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
                     Section {
-                        HStack(alignment: .top, spacing: 0) {
+                        // Lazy: only the columns scrolled into view are built.
+                        LazyHStack(alignment: .top, spacing: 0) {
                             timeColumn(height: height)
                             ForEach(entries) { e in
                                 column(e, height: height)

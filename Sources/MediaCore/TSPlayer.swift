@@ -146,7 +146,7 @@ public final class TSPlayer: @unchecked Sendable {
             unwrap.reset()
             presenter.flush()
             resetCaptions()
-            status = PlayerStatus()
+            resetStatus()
             dualMonoVotes = 0
         }
     }
@@ -156,13 +156,44 @@ public final class TSPlayer: @unchecked Sendable {
             demuxer.reset()
             video = nil
             audio = nil
+            // The next stream (another server, a file) starts with the default service and audio.
+            demuxer.preferredServiceID = nil
+            demuxer.audioIndex = 0
             unwrap.reset()
             presenter.clear()
             resetCaptions()
-            status = PlayerStatus()
+            resetStatus()
+            dualMonoVotes = 0
             let s = status
             main { $0.onStatus?(s) }
         }
+    }
+
+    /// No more input (end of a file): keep presenting the captions decoded but not yet due.
+    public func finishInput() {
+        queue.async { [self] in
+            drainCaptions(until: ProcessInfo.processInfo.systemUptime + 15, stream: streamGeneration)
+        }
+    }
+
+    /// Bumped by `reset` / `stop` (queue only): a drain for a finished file stops once another
+    /// stream starts.
+    private var streamGeneration = 0
+
+    private func drainCaptions(until deadline: TimeInterval, stream: Int) {
+        guard stream == streamGeneration else { return }
+        deliverCaptions()
+        guard !pendingCaptions.isEmpty, ProcessInfo.processInfo.systemUptime < deadline else { return }
+        queue.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.drainCaptions(until: deadline, stream: stream) }
+    }
+
+    private func resetStatus() {
+        streamGeneration &+= 1
+        status = PlayerStatus()
+        bytesWindow = 0
+        windowStart = Date()
+        droppedPES = 0
+        lastScrambledSelected = 0
     }
 
     // MARK: - Options

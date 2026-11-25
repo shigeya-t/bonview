@@ -83,7 +83,8 @@ else
   ARCHIVE="$OUT/BonView.xcarchive"
   mkdir -p "$ARCHIVE/Products/Applications"
   HARDENED_RUNTIME=1 APP="$ARCHIVE/Products/Applications/BonView.app" bundle
-  plist() { /usr/libexec/PlistBuddy -c "Print :$1" macOS/Resources/Info.plist; }
+  # From the built app: BUNDLE_ID may have changed the identifier there.
+  plist() { /usr/libexec/PlistBuddy -c "Print :$1" "$ARCHIVE/Products/Applications/BonView.app/Contents/Info.plist"; }
   cat > "$ARCHIVE/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -136,6 +137,9 @@ if [[ -n "${ICLOUD_TEAM:-}" ]]; then
 fi
 FFV=$(<build/ffmpeg/.version)
 [[ -d "$OUT/BonView.app/Contents/Frameworks" ]] || { echo "FFmpeg was not bundled" >&2; exit 1; }
+# Checked before notarizing: the release must not go out without the LGPL source.
+FFMPEG_SRC="build/ffmpeg-src/ffmpeg-$FFV.tar.xz"
+[[ -f "$FFMPEG_SRC" ]] || { echo "missing $FFMPEG_SRC (run scripts/build_ffmpeg.sh)" >&2; exit 1; }
 
 ZIP="BonView-$VERSION-macOS-$ARCH.zip"
 if (( ${#NOTARY_ARGS} )); then
@@ -155,7 +159,7 @@ if (( ${#NOTARY_ARGS} )); then
 fi
 ditto -c -k --keepParent "$OUT/BonView.app" "$OUT/$ZIP"
 rm -rf "$OUT/BonView.app"
-cp "build/ffmpeg-src/ffmpeg-$FFV.tar.xz" "$OUT/"
+cp "$FFMPEG_SRC" "$OUT/"
 
 cat > "$OUT/FFmpeg-SOURCE.txt" <<EOF
 BonView $VERSION (commit $COMMIT) bundles FFmpeg $FFV as dynamic libraries in

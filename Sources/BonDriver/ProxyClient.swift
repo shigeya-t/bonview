@@ -60,6 +60,9 @@ public final class ProxyClient: BonDriver, @unchecked Sendable {
         }
         let sock = try TCPSocket.connect(host: config.address, port: config.port,
                                          timeout: TimeInterval(max(1, config.connectTimeout)))
+        // The receiver may wait indefinitely for TS (tuner closed), so no receive timeout; but a
+        // server that stops reading must not block a command forever.
+        sock.setSendTimeout(max(10, config.connectTimeout))
         let client = ProxyClient(config: config, socket: sock)
         client.startReceiver()
         do {

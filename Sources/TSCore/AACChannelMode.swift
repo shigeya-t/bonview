@@ -52,13 +52,14 @@ public enum AACChannelMode: Equatable, Sendable {
     private static func parsePCEFront(_ r: inout BitReader) -> AACChannelMode? {
         guard r.skip(2 + 4),                                         // object_type, sampling_frequency_index
               let front = r.read(4), let side = r.read(4), let back = r.read(4),
-              r.skip(2 + 3 + 4) else { return nil }                  // lfe, assoc_data, valid_cc
+              let lfe = r.read(2), r.skip(3 + 4) else { return nil }  // assoc_data, valid_cc
         // mono_mixdown (element_number 4), stereo_mixdown (4), matrix_mixdown (idx 2 + pseudo_surround 1)
         for width in [4, 4, 3] {
             guard let present = r.read(1) else { return nil }
             if present == 1 { guard r.skip(width) else { return nil } }
         }
-        guard front == 2, side == 0, back == 0 else { return .other }
+        // Two front SCEs and nothing else (an LFE would make it 2.1, not two programmes).
+        guard front == 2, side == 0, back == 0, lfe == 0 else { return .other }
         var cpes = 0
         for _ in 0..<front {
             guard let isCPE = r.read(1), r.skip(4) else { return nil }

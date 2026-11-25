@@ -150,6 +150,22 @@ public final class AVPresenter: @unchecked Sendable {
                                                  sampleTiming: &timing, sampleBufferOut: &sb)
         guard let sb else { return }
         lock.lock()
+        var jumped = false
+        if anchored && !hasAudio {
+            // Video-only stream: nothing else re-anchors, so handle underrun / overrun / jumps here.
+            let clock = now
+            if t < clock || t - clock > _maxBuffered + _latency {
+                anchored = false
+                jumped = abs(t - clock) > 1.0
+                if jumped { frames.keepCurrent(clock: clock) }
+            }
+        }
+        if !anchored && jumped {
+            lock.unlock()
+            synchronizer.setRate(0, time: .zero)
+            displayLayer.sampleBufferRenderer.flush(removingDisplayedImage: false, completionHandler: nil)
+            lock.lock()
+        }
         anchorIfNeeded(at: t, isAudio: false)
         let ok = anchored
         if ok { frames.append(pb, seconds: t, clock: now) }

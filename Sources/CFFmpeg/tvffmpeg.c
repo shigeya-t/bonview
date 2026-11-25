@@ -56,7 +56,8 @@ struct TVDecoder {
     int deinterlace; // TV_DEINTERLACE_*
     AVFilterGraph *graph;
     AVFilterContext *src, *sink;
-    int gW, gH, gFmt;
+    // Frame properties the filter graph was configured for (buffersrc rejects frames that differ).
+    int gW, gH, gFmt, gSarN, gSarD, gCs, gRange;
     struct SwsContext *sws;
     int sW, sH, sFmt;
     CVPixelBufferPoolRef pool;
@@ -94,6 +95,9 @@ static enum AVPixelFormat get_format(AVCodecContext *c, const enum AVPixelFormat
     if (d->hwActive) {
         for (p = fmts; *p != AV_PIX_FMT_NONE; p++)
             if (*p == AV_PIX_FMT_VIDEOTOOLBOX) return *p;
+        // VideoToolbox cannot take this stream (profile / size): libavcodec decodes in software.
+        d->hwActive = 0;
+        snprintf(d->desc, sizeof d->desc, "%s (software)", d->codec->name);
     }
     for (p = fmts; *p != AV_PIX_FMT_NONE; p++) {
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(*p);
@@ -163,6 +167,17 @@ static void free_graph(TVDecoder *d) {
     d->gFmt = -1;
 }
 
+static AVRational graph_sar(const AVFrame *f) {
+    AVRational sar = f->sample_aspect_ratio;
+    return (sar.num <= 0 || sar.den <= 0) ? (AVRational){1, 1} : sar;
+}
+
+static int graph_matches(const TVDecoder *d, const AVFrame *f) {
+    AVRational sar = graph_sar(f);
+    return d->graph && d->gW == f->width && d->gH == f->height && d->gFmt == f->format &&
+           d->gSarN == sar.num && d->gSarD == sar.den && d->gCs == f->colorspace && d->gRange == f->color_range;
+}
+
 void tv_decoder_destroy(TVDecoder *d) {
     if (!d) return;
     free_graph(d);
@@ -194,16 +209,35 @@ static void attach_color(CVPixelBufferRef pb, const AVFrame *f) {
     else if (f->colorspace == AVCOL_SPC_BT2020_NCL) matrix = kCVImageBufferYCbCrMatrix_ITU_R_2020;
     else if (f->colorspace == AVCOL_SPC_SMPTE170M || f->colorspace == AVCOL_SPC_BT470BG)
         matrix = kCVImageBufferYCbCrMatrix_ITU_R_601_4;
+    CFStringRef primaries = sd ? kCVImageBufferColorPrimaries_SMPTE_C : kCVImageBufferColorPrimaries_ITU_R_709_2;
+    switch (f->color_primaries) {
+    case AVCOL_PRI_BT709:     primaries = kCVImageBufferColorPrimaries_ITU_R_709_2; break;
+    case AVCOL_PRI_BT2020:    primaries = kCVImageBufferColorPrimaries_ITU_R_2020; break;
+    case AVCOL_PRI_SMPTE170M:
+    case AVCOL_PRI_SMPTE240M: primaries = kCVImageBufferColorPrimaries_SMPTE_C; break;
+    case AVCOL_PRI_BT470BG:   primaries = kCVImageBufferColorPrimaries_EBU_3213; break;
+    default: break;
+    }
+    // ARIB STD-B67 (HLG) is what 4K/8K broadcasting uses; PQ is listed for completeness.
+    CFStringRef transfer = kCVImageBufferTransferFunction_ITU_R_709_2;
+    switch (f->color_trc) {
+    case AVCOL_TRC_ARIB_STD_B67: transfer = kCVImageBufferTransferFunction_ITU_R_2100_HLG; break;
+    case AVCOL_TRC_SMPTE2084:    transfer = kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ; break;
+    case AVCOL_TRC_BT2020_10:
+    case AVCOL_TRC_BT2020_12:    transfer = kCVImageBufferTransferFunction_ITU_R_2020; break;
+    default: break;
+    }
     CVBufferSetAttachment(pb, kCVImageBufferYCbCrMatrixKey, matrix, kCVAttachmentMode_ShouldPropagate);
-    CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey,
-                          sd ? kCVImageBufferColorPrimaries_SMPTE_C : kCVImageBufferColorPrimaries_ITU_R_709_2,
-                          kCVAttachmentMode_ShouldPropagate);
-    CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2,
-                          kCVAttachmentMode_ShouldPropagate);
+    CVBufferSetAttachment(pb, kCVImageBufferColorPrimariesKey, primaries, kCVAttachmentMode_ShouldPropagate);
+    CVBufferSetAttachment(pb, kCVImageBufferTransferFunctionKey, transfer, kCVAttachmentMode_ShouldPropagate);
 }
 
 static void attach_par(CVPixelBufferRef pb, AVRational sar) {
-    if (sar.num <= 0 || sar.den <= 0) return;
+    if (sar.num <= 0 || sar.den <= 0) {
+        // Pool buffers are reused: don't leave the aspect ratio of an earlier picture on this one.
+        CVBufferRemoveAttachment(pb, kCVImageBufferPixelAspectRatioKey);
+        return;
+    }
     int h = sar.num, v = sar.den;
     CFNumberRef hn = CFNumberCreate(NULL, kCFNumberIntType, &h);
     CFNumberRef vn = CFNumberCreate(NULL, kCFNumberIntType, &v);
@@ -263,11 +297,10 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
     free_graph(d);
     d->graph = avfilter_graph_alloc();
     if (!d->graph) return AVERROR(ENOMEM);
-    AVRational sar = f->sample_aspect_ratio;
-    if (sar.num <= 0 || sar.den <= 0) sar = (AVRational){1, 1};
+    AVRational sar = graph_sar(f);
     char args[256];
-    snprintf(args, sizeof args, "video_size=%dx%d:pix_fmt=%d:time_base=1/90000:pixel_aspect=%d/%d",
-             f->width, f->height, f->format, sar.num, sar.den);
+    snprintf(args, sizeof args, "video_size=%dx%d:pix_fmt=%d:time_base=1/90000:pixel_aspect=%d/%d:colorspace=%d:range=%d",
+             f->width, f->height, f->format, sar.num, sar.den, f->colorspace, f->color_range);
     int ret = avfilter_graph_create_filter(&d->src, avfilter_get_by_name("buffer"), "in", args, NULL, d->graph);
     if (ret < 0) goto fail;
     ret = avfilter_graph_create_filter(&d->sink, avfilter_get_by_name("buffersink"), "out", NULL, NULL, d->graph);
@@ -306,6 +339,10 @@ static int build_graph(TVDecoder *d, const AVFrame *f) {
     d->gW = f->width;
     d->gH = f->height;
     d->gFmt = f->format;
+    d->gSarN = sar.num;
+    d->gSarD = sar.den;
+    d->gCs = f->colorspace;
+    d->gRange = f->color_range;
     return 0;
 fail:
     free_graph(d);
@@ -325,14 +362,19 @@ static void handle_video(TVDecoder *d, AVFrame *f) {
         emit_software_frame(d, f, to90k(f->best_effort_timestamp, kTB90k));
         return;
     }
-    if (!d->graph || d->gW != f->width || d->gH != f->height || d->gFmt != f->format) {
-        if (build_graph(d, f) < 0) {
-            emit_software_frame(d, f, to90k(f->best_effort_timestamp, kTB90k));
-            return;
-        }
+    // A change of size, format, aspect ratio, colour space or range needs a new graph (buffersrc
+    // refuses such frames, which used to stop the picture).
+    if (!graph_matches(d, f) && build_graph(d, f) < 0) {
+        emit_software_frame(d, f, to90k(f->best_effort_timestamp, kTB90k));
+        return;
     }
     f->pts = f->best_effort_timestamp;
-    if (av_buffersrc_add_frame_flags(d->src, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) return;
+    if (av_buffersrc_add_frame_flags(d->src, f, AV_BUFFERSRC_FLAG_KEEP_REF) < 0) {
+        // Refused for a reason not covered above: rebuild for the next frame, show this one as is.
+        free_graph(d);
+        emit_software_frame(d, f, to90k(f->best_effort_timestamp, kTB90k));
+        return;
+    }
     AVRational tb = av_buffersink_get_time_base(d->sink);
     while (av_buffersink_get_frame(d->sink, d->filtFrame) >= 0) {
         emit_software_frame(d, d->filtFrame, to90k(d->filtFrame->pts, tb));

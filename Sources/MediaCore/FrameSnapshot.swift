@@ -12,8 +12,10 @@ import UniformTypeIdentifiers
 /// at most one extra frame is retained.
 struct FrameHistory<Frame> {
     private(set) var entries: [(seconds: Double, frame: Frame)] = []
-    /// Safety bound in case the clock stops advancing while frames keep coming.
-    var limit = 600
+    /// Safety bound in case the clock stops advancing while frames keep coming. Frames are only
+    /// added while the clock runs and at most `AVPresenter.maxBuffered + latency` (≈ 3 s) ahead,
+    /// i.e. about 180 at 59.94 fps; a 1080 NV12 frame is 3 MB, so don't keep many more.
+    var limit = 240
 
     mutating func append(_ frame: Frame, seconds t: Double, clock: Double?) {
         entries.append((t, frame))
@@ -49,27 +51,51 @@ struct FrameHistory<Frame> {
 public enum FrameSnapshot {
     private static let context = CIContext(options: [.cacheIntermediates: false])
 
-    /// RGB image at the display size (pixel aspect ratio applied, e.g. 1440×1080 → 1920×1080).
+    /// RGB image at the display size: clean aperture (e.g. 1920×1088 → 1920×1080) and pixel
+    /// aspect ratio (e.g. 1440×1080 → 1920×1080) applied.
     public static func cgImage(from pb: CVPixelBuffer) -> CGImage? {
-        var image = CIImage(cvPixelBuffer: pb)
-        let w = CGFloat(CVPixelBufferGetWidth(pb)), h = CGFloat(CVPixelBufferGetHeight(pb))
-        let par = pixelAspectRatio(pb)
-        if par != 1 {
-            let target = (w * par).rounded()
-            image = image.transformed(by: CGAffineTransform(scaleX: target / w, y: 1))
+        let crop = visibleRect(pb)
+        var image = CIImage(cvPixelBuffer: pb).cropped(to: crop)
+            .transformed(by: CGAffineTransform(translationX: -crop.minX, y: -crop.minY))
+        let size = displaySize(pb)
+        if size.width != crop.width {
+            // Clamp first so linear sampling does not fade the left and right edges.
+            image = image.clampedToExtent()
+                .transformed(by: CGAffineTransform(scaleX: size.width / crop.width, y: 1))
                 .samplingLinear()
         }
-        let rect = CGRect(x: 0, y: 0, width: (w * par).rounded(), height: h)
-        return context.createCGImage(image, from: rect, format: .RGBA8,
+        return context.createCGImage(image, from: CGRect(origin: .zero, size: size), format: .RGBA8,
                                      colorSpace: CGColorSpace(name: CGColorSpace.sRGB))
     }
 
+    /// Output size of `cgImage(from:)`.
+    static func displaySize(_ pb: CVPixelBuffer) -> CGSize {
+        let crop = visibleRect(pb)
+        let width = min((crop.width * pixelAspectRatio(pb)).rounded(), maxWidth)
+        return CGSize(width: max(width, 1), height: crop.height)
+    }
+
+    /// Upper bound for the output width (a broken aspect ratio must not allocate a huge image).
+    static let maxWidth: CGFloat = 8192
+
+    /// The clean aperture in Core Image coordinates (origin bottom left), or the whole buffer.
+    static func visibleRect(_ pb: CVPixelBuffer) -> CGRect {
+        let w = CGFloat(CVPixelBufferGetWidth(pb)), h = CGFloat(CVPixelBufferGetHeight(pb))
+        let full = CGRect(x: 0, y: 0, width: w, height: h)
+        // Already bottom-left based, like Core Image (a 1920×1088 frame with offset -4 → y = 8).
+        let clean = CVImageBufferGetCleanRect(pb).integral
+        guard clean.width >= 1, clean.height >= 1, full.contains(clean) else { return full }
+        return clean
+    }
+
+    /// Horizontal / vertical pixel spacing, limited to 1/4…4 (ISDB uses 4:3 and 1:1; anything
+    /// outside that range is a broken stream).
     static func pixelAspectRatio(_ pb: CVPixelBuffer) -> CGFloat {
         guard let dict = CVBufferCopyAttachment(pb, kCVImageBufferPixelAspectRatioKey, nil) as? [CFString: Any],
               let hs = (dict[kCVImageBufferPixelAspectRatioHorizontalSpacingKey] as? NSNumber)?.doubleValue,
               let vs = (dict[kCVImageBufferPixelAspectRatioVerticalSpacingKey] as? NSNumber)?.doubleValue,
-              hs > 0, vs > 0 else { return 1 }
-        return CGFloat(hs / vs)
+              hs > 0, vs > 0, (hs / vs).isFinite else { return 1 }
+        return CGFloat(min(max(hs / vs, 0.25), 4))
     }
 
     public enum Format: String, CaseIterable, Sendable {

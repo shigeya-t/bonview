@@ -109,7 +109,8 @@ public struct ProxyPacket: Sendable, Equatable {
             units.append(u)
             i += 2
         }
-        return String(decoding: units, as: UTF16.self)
+        // An empty string (e.g. two NUL WCHARs) also means "none": enumerations end there.
+        return units.isEmpty ? nil : String(decoding: units, as: UTF16.self)
     }
 
     /// GetTsStream payload: `[size][signal level float bits][TS bytes]`.

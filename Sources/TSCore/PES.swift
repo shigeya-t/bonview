@@ -18,6 +18,8 @@ public struct PESAssembler {
 
     private var buffer = Data()
     private var expected: Int? // total PES size when PES_packet_length != 0
+    /// PES_packet_length has been read (the 6-byte header may span two TS packets).
+    private var lengthKnown = false
     private var active = false
 
     public init() {}
@@ -25,6 +27,7 @@ public struct PESAssembler {
     public mutating func reset() {
         buffer.removeAll(keepingCapacity: true)
         expected = nil
+        lengthKnown = false
         active = false
     }
 
@@ -34,16 +37,18 @@ public struct PESAssembler {
             buffer.removeAll(keepingCapacity: true)
             buffer.append(contentsOf: payload)
             active = true
-            if buffer.count >= 6 {
-                let len = Int(buffer[4]) << 8 | Int(buffer[5])
-                expected = len == 0 ? nil : len + 6
-            } else {
-                expected = nil
-            }
+            expected = nil
+            lengthKnown = false
         } else {
             guard active else { return }
             guard buffer.count + payload.count <= Self.maxSize else { reset(); return }
             buffer.append(contentsOf: payload)
+        }
+        if !lengthKnown, buffer.count >= 6 {
+            let b = buffer.startIndex
+            let len = Int(buffer[b + 4]) << 8 | Int(buffer[b + 5])
+            expected = len == 0 ? nil : len + 6
+            lengthKnown = true
         }
         if let e = expected, buffer.count >= e {
             if let p = Self.parse(buffer.prefix(e)) { emit(p) }

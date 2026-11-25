@@ -30,7 +30,10 @@ public struct EPGStore: Sendable, Equatable {
 
     public mutating func insert(_ ev: EventInfo, for key: EPGServiceKey) {
         guard let start = ev.start, let duration = ev.duration, duration > 0 else { return }
-        var list = services[key] ?? [:]
+        // Take the list out while changing it: `var list = services[key]` would keep a second
+        // reference and copy the whole dictionary on every insert.
+        var list = services.removeValue(forKey: key) ?? [:]
+        defer { if !list.isEmpty { services[key] = list } }
         let old = list[ev.eventID]
         var e = ev
         if e.extended.isEmpty { e.extended = old?.extended ?? pendingExtended[key]?[ev.eventID] ?? [] }
@@ -45,7 +48,6 @@ public struct EPGStore: Sendable, Equatable {
             if s < end && start < oe { list[id] = nil }
         }
         list[e.eventID] = e
-        services[key] = list
     }
 
     private mutating func setExtended(_ items: [ExtendedEventItem], eventID: UInt16, for key: EPGServiceKey) {
@@ -105,14 +107,18 @@ public struct EPGStore: Sendable, Equatable {
         return lo...hi
     }
 
-    /// Drop events that ended before `date`.
+    /// Drop events that ended before `date`. Extended items still waiting for their basic event
+    /// are kept (that event may arrive in the next cycle) unless there are implausibly many.
     public mutating func prune(before date: Date) {
         for (key, list) in services {
             let kept = list.filter { $0.value.end.map { $0 >= date } ?? false }
             services[key] = kept.isEmpty ? nil : kept
         }
-        pendingExtended.removeAll()
+        if pendingExtended.values.reduce(0, { $0 + $1.count }) > Self.maxPendingExtended { pendingExtended.removeAll() }
     }
+
+    /// About two weeks of events for 50 services.
+    static let maxPendingExtended = 50_000
 }
 
 extension EPGStore: Codable {
@@ -224,17 +230,22 @@ public struct EITScheduleProgress: Sendable {
 // MARK: - Collector
 
 /// Collects EIT (p/f and schedule) and TOT from a TS. Thread-safe: `feed` may be called from
-/// the driver's receive thread; parsing runs on a private serial queue.
+/// the driver's receive thread; parsing runs on a private serial queue. The results are behind a
+/// lock, so reading them (every second from the main thread) never waits for that queue.
 public final class EPGCollector: @unchecked Sendable {
     private let queue = DispatchQueue(label: "bonview.epg", qos: .utility)
+    // Queue only.
     private var splitter = TSPacketSplitter()
     private var sections: [UInt16: SectionAssembler] = [:]
+    private var lastCC: [UInt16: UInt8] = [:]
     private var seen: [SectionID: UInt32] = [:]
+    // Under `lock`.
+    private let lock = NSLock()
     private var updates = EPGStore()
     private var progress = EITScheduleProgress()
     private var _actualTSID: UInt16?
     private var _time: Date?
-    private var _lastNewSchedule: Date?
+    private var _lastNewSchedule: TimeInterval?
 
     private struct SectionID: Hashable {
         var pid: UInt16, tableID: UInt8, serviceID: UInt16, tsid: UInt16, onid: UInt16, section: UInt8
@@ -252,36 +263,48 @@ public final class EPGCollector: @unchecked Sendable {
 
     /// Events received since the last call.
     public func takeUpdates() -> EPGStore {
-        queue.sync {
-            let u = updates
-            updates = EPGStore()
-            return u
-        }
+        lock.lock(); defer { lock.unlock() }
+        let u = updates
+        updates = EPGStore()
+        return u
     }
 
     /// Forget the packet/section state (after a channel change). Schedule progress is kept.
     public func resetStream() {
-        queue.sync {
+        lock.lock()
+        _actualTSID = nil
+        _lastNewSchedule = nil
+        lock.unlock()
+        queue.async { [self] in
             splitter.reset()
             sections.removeAll()
+            lastCC.removeAll()
+            // Sections of the old stream processed before this point may have set these again.
+            lock.lock()
             _actualTSID = nil
             _lastNewSchedule = nil
+            lock.unlock()
         }
     }
 
     /// Forget everything, including the sections already seen and the collected events (the guide
     /// was cleared, or another server is used): what arrives next is collected again.
+    /// Synchronous (unlike `resetStream`): data queued before the call is processed and dropped
+    /// first, so none of it reaches `takeUpdates` afterwards (e.g. the previous server's guide).
     public func resetAll() {
         queue.sync {
             splitter.reset()
             sections.removeAll()
+            lastCC.removeAll()
             seen.removeAll()
             hEITServices.removeAll()
-            updates = EPGStore()
-            progress = EITScheduleProgress()
-            _actualTSID = nil
-            _time = nil
-            _lastNewSchedule = nil
+            locked {
+                updates = EPGStore()
+                progress = EITScheduleProgress()
+                _actualTSID = nil
+                _time = nil
+                _lastNewSchedule = nil
+            }
         }
     }
 
@@ -289,18 +312,29 @@ public final class EPGCollector: @unchecked Sendable {
     public func flush() { queue.sync {} }
 
     /// TSID of the stream, from EIT p/f actual.
-    public var actualTransportStreamID: UInt16? { queue.sync { _actualTSID } }
-    public var broadcastTime: Date? { queue.sync { _time } }
-    /// When a basic schedule section not seen before last arrived (since `resetStream`).
-    public var lastNewScheduleSection: Date? { queue.sync { _lastNewSchedule } }
+    public var actualTransportStreamID: UInt16? { locked { _actualTSID } }
+    public var broadcastTime: Date? { locked { _time } }
+    /// When a basic schedule section not seen before last arrived (since `resetStream`), in
+    /// `ProcessInfo.systemUptime` seconds (unaffected by clock changes).
+    public var lastNewScheduleSection: TimeInterval? { locked { _lastNewSchedule } }
 
     public func isComplete(originalNetworkID: UInt16?, transportStreamID: UInt16, serviceID: UInt16) -> Bool {
-        queue.sync { progress.isComplete(originalNetworkID: originalNetworkID, transportStreamID: transportStreamID, serviceID: serviceID) }
+        locked { progress.isComplete(originalNetworkID: originalNetworkID, transportStreamID: transportStreamID, serviceID: serviceID) }
+    }
+
+    private func locked<T>(_ body: () -> T) -> T {
+        lock.lock(); defer { lock.unlock() }
+        return body()
     }
 
     private func process(_ data: Data) {
         splitter.split(data) { p in
             guard !p.transportError, p.scramblingControl == 0, Self.pids.contains(p.pid), let payload = p.payload else { return }
+            if let last = lastCC[p.pid], !p.discontinuityIndicator {
+                if last == p.continuityCounter { return } // duplicate packet: appending it twice breaks the section
+                if (last + 1) & 0x0F != p.continuityCounter { sections[p.pid]?.reset() }
+            }
+            lastCC[p.pid] = p.continuityCounter
             var asm = sections.removeValue(forKey: p.pid) ?? SectionAssembler() // keep the buffer uniquely referenced
             asm.push(payload, unitStart: p.payloadUnitStart) { section($0, pid: p.pid) }
             sections[p.pid] = asm
@@ -310,20 +344,22 @@ public final class EPGCollector: @unchecked Sendable {
     private func section(_ s: [UInt8], pid: UInt16) {
         switch s[0] {
         case 0x70, 0x73:
-            if let t = TOT.time(s) { _time = t }
+            if let t = TOT.time(s) { locked { _time = t } }
         case 0x4E...0x6F:
             // section_syntax_indicator: without it the CRC was not checked (see SectionHeader).
             guard s.count >= 18, s[1] & 0x80 != 0 else { return }
             let crc = UInt32(s[s.count - 4]) << 24 | UInt32(s[s.count - 3]) << 16 | UInt32(s[s.count - 2]) << 8 | UInt32(s[s.count - 1])
             let id = SectionID(pid: pid, tableID: s[0], serviceID: s.u16(3), tsid: s.u16(8), onid: s.u16(10), section: s[6])
-            if s[0] == 0x4E { _actualTSID = id.tsid }
+            if s[0] == 0x4E { locked { _actualTSID = id.tsid } }
             let svc = EITServiceKey(onid: id.onid, tsid: id.tsid, sid: id.serviceID)
             if pid == EITServiceKey.hEITPID { hEITServices.insert(svc) } else if hEITServices.contains(svc) { return }
             if seen[id] == crc { return }
             seen[id] = crc
             guard let eit = EIT(s) else { return }
+            lock.lock()
             updates.apply(eit)
-            if progress.record(eit) { _lastNewSchedule = Date() }
+            if progress.record(eit) { _lastNewSchedule = ProcessInfo.processInfo.systemUptime }
+            lock.unlock()
         default:
             break
         }

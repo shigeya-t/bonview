@@ -25,6 +25,19 @@ import Testing
     @Test func wideStrings() {
         #expect(ProxyPacket.wideString(.enumChannelName, "地上D").wideStringValue == "地上D")
         #expect(ProxyPacket.wideString(.enumChannelName, nil).wideStringValue == nil)
+        // An empty string ends an enumeration like a missing one.
+        #expect(ProxyPacket.wideString(.enumChannelName, "").wideStringValue == nil)
+    }
+
+    @Test func configRejectsBadValues() throws {
+        #expect(throws: (any Error).self) { try ProxyConfig.parse("ADDRESS=a\nPORT=0\nBONDRIVER=b") }
+        // Empty Wake-on-LAN values (a template with blanks) are "not set".
+        let cfg = try ProxyConfig.parse("ADDRESS=a\nPORT=1\nBONDRIVER=b\nTARGET_MACADDRESS=\nTARGET_ADDRESS=\nTARGET_PORT=")
+        #expect(cfg.macAddress == nil && cfg.magicPacketAddress == nil && cfg.magicPacketPort == nil)
+        #expect(ProxyConfig.parseMAC("00-11-22-AA-bb-CC") == [0x00, 0x11, 0x22, 0xAA, 0xBB, 0xCC])
+        #expect(ProxyConfig.parseMAC("0011.22aa.bbcc") == [0x00, 0x11, 0x22, 0xAA, 0xBB, 0xCC])
+        #expect(ProxyConfig.parseMAC("00-11-22-AA-BB-CG") == nil)
+        #expect(ProxyConfig.parseMAC("00x11-22-AA-BB-CC") == nil)
     }
 
     @Test func tsPayloadRejectsSizeMismatch() {

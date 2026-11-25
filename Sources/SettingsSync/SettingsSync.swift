@@ -15,10 +15,14 @@ extension UserDefaults: KeyValueStore {
         if let value { set(value, forKey: key) } else { removeObject(forKey: key) }
     }
 
-    /// Only this app's own domain (not NSGlobalDomain / argument domain).
+    /// Only this store's own keys (not NSGlobalDomain / argument domain). For `.standard` that is
+    /// the app's persistent domain; other instances (suites) leave out the global domain's keys.
     public var settingKeys: [String] {
-        guard let id = Bundle.main.bundleIdentifier else { return Array(dictionaryRepresentation().keys) }
-        return Array((persistentDomain(forName: id) ?? [:]).keys)
+        if self === UserDefaults.standard, let id = Bundle.main.bundleIdentifier {
+            return Array((persistentDomain(forName: id) ?? [:]).keys)
+        }
+        let global = Set((UserDefaults.standard.persistentDomain(forName: UserDefaults.globalDomain) ?? [:]).keys)
+        return dictionaryRepresentation().keys.filter { !global.contains($0) }
     }
 }
 

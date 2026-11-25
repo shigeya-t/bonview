@@ -60,6 +60,13 @@ private struct ProgramPanel: View {
             }
             Text(ev.title).font(.headline).textSelection(.enabled)
             if !ev.text.isEmpty { Text(ev.text).font(.callout).textSelection(.enabled) }
+            // Extended description (出演者, 番組内容…), as on iOS.
+            ForEach(Array(ev.extended.enumerated()), id: \.offset) { _, item in
+                VStack(alignment: .leading, spacing: 2) {
+                    if !item.heading.isEmpty { Text(item.heading).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    Text(item.text).font(.callout).textSelection(.enabled)
+                }
+            }
         }
     }
 }
