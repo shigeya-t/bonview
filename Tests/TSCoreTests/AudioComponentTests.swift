@@ -28,6 +28,23 @@ import Testing
         #expect(AudioComponent(descriptor: [0xF2, 0x03]) == nil)
     }
 
+    @Test func truncatedSecondLanguageAndCase() throws {
+        // Multilingual flag set but the second code cut off: no garbage text, one language.
+        let cut = Array(Self.body(tag: 0x10, type: 0x02, langs: ["jpn", "eng"]).prefix(11))
+        let a = try #require(AudioComponent(descriptor: cut))
+        #expect(a.languages == ["jpn"] && a.text.isEmpty && a.dualMonoNames == nil)
+        // "JPN" and "jpn" are the same language.
+        let b = try #require(AudioComponent(descriptor: Self.body(tag: 0x10, type: 0x02, langs: ["JPN", "jpn"])))
+        #expect(b.languages == ["jpn", "jpn"] && b.dualMonoNames == nil)
+        let old = AudioComponent(componentTag: 0x10, componentType: 0x02, languages: ["JPN", "jpn"])
+        #expect(old.dualMonoNames == nil)
+        let labels = AudioComponent.labels(for: [Self.stream(0x10), Self.stream(0x11)], components: [
+            AudioComponent(componentTag: 0x10, componentType: 0x03, languages: ["JPN"]),
+            AudioComponent(componentTag: 0x11, componentType: 0x03, languages: ["jpn"]),
+        ])
+        #expect(labels == ["音声1", "音声2"])
+    }
+
     @Test func eitCarriesAudioComponents() throws {
         let d1 = Self.body(tag: 0x10, type: 0x03, langs: ["jpn"], text: "MAIN")
         let d2 = Self.body(tag: 0x11, type: 0x03, langs: ["jpn"], text: "AD")
