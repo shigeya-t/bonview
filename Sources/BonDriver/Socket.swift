@@ -3,10 +3,15 @@ import Foundation
 
 /// Minimal blocking TCP socket used by the proxy client (and the test server).
 final class TCPSocket: @unchecked Sendable {
-    /// -1 once closed. Changed under `writeLock`, so a send never writes to a descriptor number
-    /// that `close` has freed (and the system may have handed to another socket).
+    /// -1 once closed. Set to -1 while holding both locks: a send (which holds `writeLock`) never
+    /// writes to a descriptor number that `close` has freed (and the system may have handed to
+    /// another socket), and `shutdown` (which only needs `fdLock`) never waits for a send stuck on
+    /// a full socket buffer.
     private var fd: Int32
+    /// Serialises writers (one packet at a time).
     private let writeLock = NSLock()
+    /// Guards changes to `fd`; never held while blocking.
+    private let fdLock = NSLock()
 
     init(fd: Int32) {
         self.fd = fd
@@ -138,17 +143,21 @@ final class TCPSocket: @unchecked Sendable {
         return ProxyPacket(command: head[1], option: head[2], body: body)
     }
 
-    /// Unblocks a reader thread (the descriptor stays open until `close`).
+    /// Unblocks reader and writer threads at once (the descriptor stays open until `close`).
     func shutdown() {
-        writeLock.lock(); defer { writeLock.unlock() }
+        fdLock.lock(); defer { fdLock.unlock() }
         if fd >= 0 { Darwin.shutdown(fd, SHUT_RDWR) }
     }
 
     /// Call once no thread is reading any more (readers use the descriptor without the lock).
     func close() {
+        // A send blocked on a full buffer returns once the socket is shut down; then take its lock.
+        shutdown()
         writeLock.lock()
+        fdLock.lock()
         let f = fd
         fd = -1
+        fdLock.unlock()
         writeLock.unlock()
         if f >= 0 { Darwin.close(f) }
     }

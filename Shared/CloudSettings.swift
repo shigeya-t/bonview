@@ -52,8 +52,7 @@ enum CloudSettings {
         // syncing is off, so the settings toggle can turn it back on.
         isAvailable = store.synchronize()
         guard isAvailable, isEnabled else { return }
-        // Per-channel keys of earlier versions (now one `lastServices.<profile>` each).
-        for key in store.dictionaryRepresentation.keys where key.hasPrefix("lastService.") { store.removeObject(forKey: key) }
+        migrateLastServiceKeys(store)
         let s = SettingsSync(local: UserDefaults.standard, cloud: store, isSynced: isSynced,
                              merge: ["profiles": mergeProfiles])
         sync = s
@@ -80,6 +79,27 @@ enum CloudSettings {
             }
             if !changed.isEmpty { onChange?(changed) }
         }
+    }
+
+    /// Per-channel keys of earlier versions (`lastService.<profile>.<space>-<ch>` → SID) become one
+    /// `lastServices.<profile>` dictionary each before they are removed, so devices still on an
+    /// older version or not yet migrated don't lose them. Entries already in the new form win.
+    static func migrateLastServiceKeys(_ store: NSUbiquitousKeyValueStore) {
+        let all = store.dictionaryRepresentation
+        var migrated: [String: [String: Int]] = [:]
+        for (key, value) in all where key.hasPrefix("lastService.") {
+            let rest = key.dropFirst("lastService.".count)
+            if let dot = rest.firstIndex(of: "."), let sid = (value as? NSNumber)?.intValue, sid > 0 {
+                migrated["lastServices.\(rest[..<dot])", default: [:]][String(rest[rest.index(after: dot)...])] = sid
+            }
+        }
+        for (key, old) in migrated {
+            let cloud = store.dictionary(forKey: key) as? [String: Int] ?? [:]
+            let local = UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
+            let merged = old.merging(cloud) { _, new in new }.merging(local) { _, new in new }
+            if merged != cloud { store.set(merged, forKey: key) }
+        }
+        for key in all.keys where key.hasPrefix("lastService.") { store.removeObject(forKey: key) }
     }
 
     private static func stop() {

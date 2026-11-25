@@ -287,6 +287,22 @@ public final class EPGCollector: @unchecked Sendable {
         }
     }
 
+    /// Forget everything, including the sections already seen and the collected events (the guide
+    /// was cleared, or another server is used): what arrives next is collected again.
+    public func resetAll() {
+        queue.sync {
+            splitter.reset()
+            sections.removeAll()
+            seen.removeAll()
+            hEITServices.removeAll()
+            updates = EPGStore()
+            progress = EITScheduleProgress()
+            _actualTSID = nil
+            _time = nil
+            _lastNewSchedule = nil
+        }
+    }
+
     /// Wait until everything fed so far has been processed.
     public func flush() { queue.sync {} }
 

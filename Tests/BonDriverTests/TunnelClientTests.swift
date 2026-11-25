@@ -66,6 +66,23 @@ import Testing
         #expect(server.commands.last == "Rele")
     }
 
+    @Test func releaseDoesNotWaitForHungServer() throws {
+        let server = try MockTunnelServer()
+        server.start()
+        defer { server.stop() }
+        var cfg = TunnelConfig(address: "127.0.0.1", port: server.port, origin: "Mock-T")
+        cfg.sendRecvTimeout = 20
+        let client = try TunnelClient.connect(config: cfg)
+        try client.openTuner()
+        #expect(try client.setChannel(space: 0, channel: 0) == .tuned)
+        server.stalled = true
+        usleep(200_000) // the pump is now waiting for a GetTsStream reply
+        let start = Date()
+        client.release()
+        // Not 20 s per command: the pump's read is cut and Close / Release time out quickly.
+        #expect(Date().timeIntervalSince(start) < Double(TunnelClient.releaseTimeout) * 2 + 1)
+    }
+
     @Test func reconnectsAndRepeatsCommand() throws {
         let server = try MockTunnelServer()
         server.dropAfterCommands = 2 // drop while answering the 2nd command (ETun)

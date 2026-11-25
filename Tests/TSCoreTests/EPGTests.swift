@@ -187,4 +187,24 @@ enum EITBuilder {
         #expect(u.eventCount == 3)
         #expect(collector.takeUpdates().isEmpty)
     }
+
+    @Test func resetAllCollectsSeenSectionsAgain() {
+        let collector = EPGCollector()
+        let data = EITBuilder.packets(EITBuilder.schedule(sid: 1024, tsid: 0x7FE1, onid: 0x7FE1, base: Self.base))
+        collector.feed(data)
+        collector.flush()
+        #expect(collector.takeUpdates().eventCount == 3)
+        // After a stream reset the same sections are duplicates…
+        collector.resetStream()
+        collector.feed(data)
+        collector.flush()
+        #expect(collector.takeUpdates().isEmpty)
+        // …but after clearing the guide they are collected again.
+        collector.feed(data)
+        collector.resetAll()
+        #expect(collector.takeUpdates().isEmpty) // nothing of what was queued before the reset
+        collector.feed(data)
+        collector.flush()
+        #expect(collector.takeUpdates().eventCount == 3)
+    }
 }

@@ -16,6 +16,12 @@ final class MockTunnelServer: @unchecked Sendable {
     var signal: Float = 31.5
     /// Close the connection after this many commands (once) to exercise reconnection.
     var dropAfterCommands: Int?
+    /// Keeps reading commands but stops replying (a hung server).
+    var stalled: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return _stalled }
+        set { lock.lock(); _stalled = newValue; lock.unlock() }
+    }
+    private var _stalled = false
 
     private let lock = NSLock()
     private var _commands: [String] = []
@@ -89,7 +95,8 @@ final class MockTunnelServer: @unchecked Sendable {
 
         while let cmd = try? s.readExactly(16) {
             let name = String(decoding: cmd[0..<4], as: UTF8.self)
-            lock.lock(); _commands.append(name); let count = _commands.count; lock.unlock()
+            lock.lock(); _commands.append(name); let count = _commands.count; let stall = _stalled; lock.unlock()
+            if stall { continue }
             let p1 = cmd.leUInt32(at: 8), p2 = cmd.leUInt32(at: 12)
             var reply: Data
             if cmd == lastCommand {
