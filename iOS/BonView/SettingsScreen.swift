@@ -183,8 +183,8 @@ private struct LicensesScreen: View {
     private var items: [Item] {
         [
             Item(title: "BonView", note: "MIT License", files: ["LICENSE"]),
-            Item(title: "FFmpeg",
-                 note: "LGPL 2.1 以降。映像・音声のデコードに使っています。ソースコードは https://ffmpeg.org/releases/ から入手でき、BonView のリリースにも同梱しています。",
+            Item(title: FFmpegAvailability.version.map { "FFmpeg \($0)" } ?? "FFmpeg",
+                 note: "LGPL 2.1 以降。映像・音声のデコードに使っています。ソースコードは https://ffmpeg.org/releases/ から入手でき、BonView のリリースにも同梱しています。iOS 用のビルド手順（構成オプション）はリポジトリの scripts/build_ffmpeg_ios.sh にあります。",
                  files: ["FFmpeg/LICENSE.md", "FFmpeg/COPYING.LGPLv2.1"]),
             Item(title: "libaribcaption", note: "ARIB 外字の Unicode 対応表 (ISC License)", files: ["Licenses/libaribcaption.txt"]),
             Item(title: "BonDriverProxy_Linux / BonDriverTunnel", note: "プロトコルの実装は各プロジェクト（MIT License）を参考にしています。", files: []),

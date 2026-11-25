@@ -9,4 +9,7 @@ public enum FFmpegAvailability {
     }()
 
     public static var isAvailable: Bool { missingLibraries.isEmpty }
+
+    /// Release of the loaded FFmpeg (e.g. "9.0.2"), nil when libavutil is missing.
+    public static let version: String? = tv_ffmpeg_version().map { String(cString: $0) }
 }
