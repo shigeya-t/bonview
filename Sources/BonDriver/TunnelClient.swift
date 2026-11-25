@@ -32,7 +32,14 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     static let maxTsBuf = 481_280
 
     private let lock = NSRecursiveLock()
-    private var socket: TCPSocket?
+    /// Used under `lock`; also read under `stateLock` by `release` (to cut a read that hangs).
+    private var socket: TCPSocket? {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _socket }
+        set { stateLock.lock(); _socket = newValue; stateLock.unlock() }
+    }
+    private var _socket: TCPSocket?
+    /// How long releasing waits for each reply (and for a GetTsStream in progress) before giving up.
+    static let releaseTimeout = 3
     private var sessionID: UInt32 = 0
     private var sequence: UInt32 = 0
     private var failed = false
@@ -145,7 +152,12 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
         // While releasing, don't reconnect: closing must not wait for a second connect timeout.
         for attempt in 0..<(isReleased ? 1 : 2) {
             do {
-                if attempt > 0 { try handshake(create: false) }
+                if attempt > 0 {
+                    // Released meanwhile (the socket was shut down to end a hung read): don't reconnect.
+                    stateLock.lock(); let releasing = released; stateLock.unlock()
+                    if releasing { break }
+                    try handshake(create: false)
+                }
                 try write(cmd, p1, p2)
                 guard let s = socket else { throw BonDriverError.disconnected }
                 return try read(s)
@@ -231,7 +243,15 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
     private func stopPump() {
         guard let p = pump else { return }
         pump = nil
-        if p != Thread.current { pumpDone.wait() }
+        if p == Thread.current { return }
+        stateLock.lock(); let releasing = released; stateLock.unlock()
+        if releasing, pumpDone.wait(timeout: .now() + .seconds(Self.releaseTimeout)) == .timedOut {
+            // The server stopped answering: end the read now instead of after the full timeout.
+            socket?.shutdown()
+        } else if releasing {
+            return
+        }
+        pumpDone.wait()
     }
 
     // MARK: - IBonDriver
@@ -277,6 +297,8 @@ public final class TunnelClient: BonDriver, @unchecked Sendable {
         if released { stateLock.unlock(); return }
         released = true
         stateLock.unlock()
+        // Close and Release must not each wait the full send/receive timeout for a silent server.
+        socket?.setTimeouts(Self.releaseTimeout)
         closeTuner()
         lock.lock()
         // Any unknown command makes the server release the BonDriver and reply 0.
