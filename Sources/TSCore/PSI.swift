@@ -94,8 +94,10 @@ public struct SectionHeader {
     public var sectionNumber: UInt8
     public var lastSectionNumber: UInt8
 
+    /// nil for a section too short for the header and CRC, without section_syntax_indicator (a
+    /// corrupted section would otherwise skip the CRC check) or not yet applicable (current_next 0).
     init?(_ s: [UInt8]) {
-        guard s.count >= 12 else { return nil }
+        guard s.count >= 12, s[1] & 0x80 != 0, s[5] & 1 != 0 else { return nil }
         tableID = s[0]
         tableIDExtension = s.u16(3)
         version = (s[5] >> 1) & 0x1F
@@ -112,7 +114,7 @@ public struct Descriptor {
     static func parse(_ s: [UInt8], from: Int, length: Int) -> [Descriptor] {
         var out: [Descriptor] = []
         var i = from
-        let end = Swift.min(from + length, s.count)
+        let end = Swift.min(from + length, s.count - 4) // never into the CRC
         while i + 2 <= end {
             let tag = s[i], len = Int(s[i + 1])
             guard i + 2 + len <= end else { break }
@@ -131,7 +133,7 @@ public struct PAT: Equatable {
     public var programs: [(programNumber: UInt16, pmtPID: UInt16)]
 
     public init?(_ s: [UInt8]) {
-        guard s[0] == 0x00, let h = SectionHeader(s) else { return nil }
+        guard let h = SectionHeader(s), h.tableID == 0x00 else { return nil }
         transportStreamID = h.tableIDExtension
         programs = []
         var i = 8
@@ -186,7 +188,7 @@ public struct PMT: Equatable {
     public var ecmPID: UInt16?
 
     public init?(_ s: [UInt8]) {
-        guard s[0] == 0x02, let h = SectionHeader(s) else { return nil }
+        guard let h = SectionHeader(s), h.tableID == 0x02, s.count >= 16 else { return nil }
         programNumber = h.tableIDExtension
         version = h.version
         pcrPID = s.u13(8)
@@ -223,7 +225,7 @@ public struct SDT {
     public var services: [Service]
 
     public init?(_ s: [UInt8]) {
-        guard s[0] == 0x42, let h = SectionHeader(s), s.count >= 15 else { return nil }
+        guard let h = SectionHeader(s), h.tableID == 0x42, s.count >= 15 else { return nil }
         transportStreamID = h.tableIDExtension
         originalNetworkID = s.u16(8)
         services = []
@@ -333,7 +335,7 @@ public struct EIT {
     public var isBasicSchedule: Bool { isSchedule && tableID & 0x08 == 0 }
 
     public init?(_ s: [UInt8]) {
-        guard (0x4E...0x6F).contains(s[0]), let h = SectionHeader(s), s.count >= 18 else { return nil }
+        guard let h = SectionHeader(s), (0x4E...0x6F).contains(h.tableID), s.count >= 18 else { return nil }
         tableID = s[0]
         serviceID = h.tableIDExtension
         version = h.version
@@ -425,7 +427,7 @@ public struct NIT: Equatable {
     public var transportStreams: [TransportStream]
 
     public init?(_ s: [UInt8]) {
-        guard s[0] == 0x40, let h = SectionHeader(s), s.count >= 16 else { return nil }
+        guard let h = SectionHeader(s), h.tableID == 0x40, s.count >= 16 else { return nil }
         networkID = h.tableIDExtension
         networkName = nil
         transportStreams = []
@@ -469,7 +471,7 @@ public struct NIT: Equatable {
 public enum TOT {
     /// Current broadcast time (JST) from TDT (0x70) or TOT (0x73).
     public static func time(_ s: [UInt8]) -> Date? {
-        guard (s[0] == 0x70 || s[0] == 0x73), s.count >= 8 else { return nil }
+        guard s.count >= 8, s[0] == 0x70 || s[0] == 0x73 else { return nil }
         return AribTime.date(mjdBCD: Array(s[3..<8]))
     }
 }

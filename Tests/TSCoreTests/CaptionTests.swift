@@ -218,6 +218,14 @@ enum CaptionBuilder {
         #expect(screen.lines == ["一ーーーー", "二"])
     }
 
+    @Test func repeatToEndOfLineStopsAtPartialCell() {
+        // Standard HD area 620 dots with 40-dot cells: 15 cells, 20 dots left over. RPC 0 used to
+        // put one more glyph at the start of the next row.
+        var screen = CaptionScreen()
+        screen.apply(Self.header + CaptionBuilder.kanji("一") + [0x98, 0x40] + CaptionBuilder.kanji("ー"))
+        #expect(screen.lines == ["一" + String(repeating: "ー", count: 14)])
+    }
+
     @Test func repeatCharacter() {
         var screen = CaptionScreen()
         screen.apply([0x98, 0x43] + CaptionBuilder.kanji("ー"))
