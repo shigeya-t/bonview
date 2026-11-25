@@ -15,7 +15,7 @@ enum CloudSettings {
     /// Local-only switch (設定 → iCloud で同期).
     static let enabledKey = "iCloudSync"
     private static let syncedKeys: Set<String> = ["profiles", "currentProfile", "showCaptions", "captionStyle", "epgAutoGrab"]
-    private static let syncedPrefixes = ["scan.", "channelOrder.", "hiddenChannels.", "knownChannels.", "lastChannel.", "lastService."]
+    private static let syncedPrefixes = ["scan.", "channelOrder.", "hiddenChannels.", "knownChannels.", "lastChannel.", "lastServices."]
 
     static func isSynced(_ key: String) -> Bool {
         syncedKeys.contains(key) || syncedPrefixes.contains { key.hasPrefix($0) }
@@ -52,6 +52,8 @@ enum CloudSettings {
         // syncing is off, so the settings toggle can turn it back on.
         isAvailable = store.synchronize()
         guard isAvailable, isEnabled else { return }
+        // Per-channel keys of earlier versions (now one `lastServices.<profile>` each).
+        for key in store.dictionaryRepresentation.keys where key.hasPrefix("lastService.") { store.removeObject(forKey: key) }
         let s = SettingsSync(local: UserDefaults.standard, cloud: store, isSynced: isSynced,
                              merge: ["profiles": mergeProfiles])
         sync = s
@@ -99,7 +101,7 @@ enum CloudSettings {
               let cloudList = try? decoder.decode([ServerProfile].self, from: c) else { return cloud }
         let ids = Set(cloudList.map(\.id))
         let merged = cloudList + localList.filter { !ids.contains($0.id) }
-        return (try? JSONEncoder().encode(merged)) ?? cloud
+        return (try? Preferences.encoder.encode(merged)) ?? cloud
     }
 }
 

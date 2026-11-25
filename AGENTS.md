@@ -82,7 +82,7 @@ When bumping FFmpeg, update `FFMPEG_VERSION`/`FFMPEG_SHA256` in `build_ffmpeg.sh
   Superimpose (component_tag 0x38–0x3F) uses a second `CaptionDecoder` and is drawn regardless of the caption toggle.
   `Shared/CaptionPlaneView` renders frames (Canvas); `scripts/make_demo_ts.py --captions` exercises it.
 - **Persisted settings** use UserDefaults keys `profiles`, `currentProfile`, `lastChannel.<uuid>`,
-  `lastService.<uuid>.<space>-<ch>`, `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
+  `lastServices.<uuid>` (dictionary "<space>-<ch>" → SID; older `lastService.<uuid>.<space>-<ch>` keys are still read), `scan.<uuid>`, `showCaptions`, `captionStyle`, `screenshotFolder` / `screenshotFormat` / `screenshotIncludesCaptions`, `channelOrder.<uuid>` / `hiddenChannels.<uuid>` / `knownChannels.<uuid>`
   (entry IDs `<space>-<ch>-<sid>`; ordering logic in `ChannelListOrder`), `epgAutoGrab`, `backgroundPlayback` (iOS), `iCloudSync` / `iCloudSyncInitialized` (local only), `epgLastGrab.<uuid>`, `deinterlaceMode` (`DeinterlaceMode` raw value; falls back to the older `deinterlace` bool).
   Programme guide data is not in UserDefaults: `~/Library/Application Support/BonView/EPG/<uuid>.json` (`EPGStore` Codable, tagged with `ARIBString.decoderRevision`; bump it when decoded text changes so stale files are dropped and re-grabbed). `ProxyConfig`/`ServerProfile` decode old data with
   `decodeIfPresent` defaults — keep that when adding fields.

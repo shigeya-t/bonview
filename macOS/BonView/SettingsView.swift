@@ -91,8 +91,8 @@ private struct ServerSettings: View {
             }
             .frame(width: 210)
             Divider()
-            if let idx = model.profiles.firstIndex(where: { $0.id == selection }) {
-                ProfileEditor(profile: $model.profiles[idx])
+            if let profile = model.profiles.first(where: { $0.id == selection }) {
+                ProfileEditor(profile: model.profileBinding(profile))
             } else {
                 Text("左のリストから選択するか、＋で追加してください")
                     .foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)

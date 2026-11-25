@@ -126,7 +126,7 @@ struct ContentView: View {
             ProgressView("チャンネルスキャン中…").controlSize(.large).foregroundStyle(.white)
         case .connected where model.channelLocked:
             banner("チャンネルがロックされています（他のクライアントが使用中）")
-        case .connected where model.status.isScrambled:
+        case .connected where model.isScrambled:
             banner("スクランブルが解除されていません。サーバー側でB25デコードを有効にしてください。")
         case .connected where model.isTuning:
             ProgressView().controlSize(.large)
