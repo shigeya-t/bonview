@@ -141,6 +141,23 @@ enum Preferences {
         set(all, forKey: key)
     }
 
+    /// Servers deleted on this device (local only, newest last). A merge with iCloud — turning sync
+    /// back on, a new account — must not bring them back from the other devices' copy of the list.
+    static let deletedProfilesKey = "deletedProfiles"
+    private static let deletedProfilesLimit = 200
+
+    static var deletedProfileIDs: Set<UUID> {
+        Set((UserDefaults.standard.stringArray(forKey: deletedProfilesKey) ?? []).compactMap(UUID.init(uuidString:)))
+    }
+
+    static func recordDeletedProfiles(_ ids: Set<UUID>) {
+        var list = UserDefaults.standard.stringArray(forKey: deletedProfilesKey) ?? []
+        let new = ids.map(\.uuidString)
+        list.removeAll { new.contains($0) }
+        list += new.sorted()
+        UserDefaults.standard.set(Array(list.suffix(deletedProfilesLimit)), forKey: deletedProfilesKey)
+    }
+
     /// Everything stored for a deleted profile (removals of synced keys reach iCloud too).
     static func removeData(for profile: UUID) {
         for prefix in ["scan.", "channelOrder.", "hiddenChannels.", "knownChannels.", "lastChannel.", "lastServices.", "epgLastGrab."] {

@@ -59,6 +59,9 @@ struct CaptionPlaneView: View {
             layer.addFilter(.shadow(color: .black.opacity(0.9), radius: max(0.8, 1.2 * sy)))
             for g in frame.glyphs {
                 let cell = cellRect(g)
+                // The character sits in the middle of its display section: half the character / line
+                // spacing on each side (as libaribcaption does), not on the bottom edge. Resolved text is
+                // ascent + descent high (no line gap), so centring it centres the em box.
                 let box = CGRect(x: cell.midX - g.charWidth * sx / 2, y: cell.midY - g.charHeight * sy / 2,
                                  width: g.charWidth * sx, height: g.charHeight * sy)
                 // SSM 0;0 and the like: nothing to draw (and scaling by 0 is not invertible).
