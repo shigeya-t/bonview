@@ -9,8 +9,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5"
-    MARKETING_VERSION: "0.1.4"
-    CURRENT_PROJECT_VERSION: "6"
+    MARKETING_VERSION: "0.1.5"
+    CURRENT_PROJECT_VERSION: "7"
     DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
     # The FFmpeg XCFrameworks are arm64 only (devices and Apple silicon Simulators).
     EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
