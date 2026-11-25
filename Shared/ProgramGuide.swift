@@ -196,8 +196,9 @@ extension AppModel {
         epgProfileID = profile
         epgLoaded = true
         epgLoadToken += 1
-        passiveEPG.resetStream()
-        _ = passiveEPG.takeUpdates()
+        // Not just the stream state: sections seen before would otherwise be skipped as duplicates
+        // and the cleared guide would not fill again from the channel being watched.
+        passiveEPG.resetAll()
     }
 
     func loadEPG(_ profile: ServerProfile) {
