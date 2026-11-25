@@ -242,6 +242,33 @@ enum CaptionBuilder {
         #expect(dec.frame.glyphs.first?.content == .drcs(p))
     }
 
+    @Test func drcsDepth255DoesNotOverflow() throws {
+        // depth 255 used to trap converting the pixel value to UInt8 (2-level: 1 × 256; multi-level:
+        // 9-bit values). 2×1 patterns with every pixel set.
+        let twoLevel: [UInt8] = [1, 0x41, 0x21, 1, 0x00, 255, 2, 1, 0b1100_0000]
+        let p0 = try #require(CaptionDRCS.parseUnit(twoLevel)[0x4121])
+        #expect(p0.pixels == [1, 1] && p0.depth == 0)
+        let multi: [UInt8] = [1, 0x41, 0x22, 1, 0x01, 255, 2, 1, 0xFF, 0xC0, 0x00]
+        let p1 = try #require(CaptionDRCS.parseUnit(multi)[0x4122])
+        #expect(p1.pixels.allSatisfy { $0 == 255 } && p1.depth == 254)
+    }
+
+    @Test func longStatementWithoutClearIsBounded() {
+        // 1.26 million characters in one statement without CS: writing a character is O(1) (this
+        // used to scan every glyph per character) and the frame is capped.
+        var screen = CaptionScreen()
+        let one: [UInt8] = [0x98, 0x7F] + CaptionBuilder.kanji("ー")
+        screen.apply(Self.header + (0..<20_000).flatMap { _ in one })
+        #expect(screen.frame.glyphs.count == 4096)
+    }
+
+    @Test func overwritingACellReplacesIt() {
+        var screen = CaptionScreen()
+        screen.apply(CaptionBuilder.kanji("一") + [0x08] + CaptionBuilder.kanji("二")) // APB back over 一
+        #expect(screen.lines == ["二"])
+        #expect(screen.frame.glyphs.count == 1)
+    }
+
     @Test func managementFormatSetsPlane() {
         var dec = CaptionDecoder()
         // Format 5 = 1920×1080 horizontal.

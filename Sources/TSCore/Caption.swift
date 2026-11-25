@@ -178,10 +178,12 @@ public struct CaptionDRCS: Hashable, Sendable {
                             let bit = n * bits + k
                             v = v << 1 | Int(d[i + bit / 8] >> (7 - bit % 8) & 1)
                         }
-                        px[n] = UInt8(mode == 0 ? v * (depth + 1) : v)
+                        // Untrusted: depth 255 would need 9-bit levels; clamp to what a byte holds.
+                        px[n] = UInt8(mode == 0 ? v : min(v, depth + 1, 255))
                     }
                     i += size
-                    if out[code] == nil { out[code] = CaptionDRCS(width: w, height: h, depth: mode == 0 ? max(depth, 0) : depth, pixels: px) }
+                    // A 2-level pattern is stored as 0 / 1 of depth 0 (levels 0 … depth + 1).
+                    if out[code] == nil { out[code] = CaptionDRCS(width: w, height: h, depth: mode == 0 ? 0 : min(depth, 254), pixels: px) }
                 } else {
                     guard i + 4 <= d.count else { return out }
                     let len = Int(d[i + 2]) << 8 | Int(d[i + 3])
@@ -263,6 +265,12 @@ public struct CaptionScreen: Equatable, Sendable {
     private var fg = CaptionColor.clut[7], bg = CaptionColor.clut[8]
     private var underline = false, enclosure = 0
     private var repeatCount = 1
+    /// Index of the glyph occupying each cell (keyed by rounded position), so writing a character
+    /// is O(1) and a long statement without CS cannot go quadratic.
+    private var cellIndex: [CellKey: Int] = [:]
+    private struct CellKey: Hashable, Sendable { var x: Int, y: Int }
+    /// Upper bound on glyphs in one frame (a full 960×540 plane of 40×60 cells is 216).
+    static let maxGlyphs = 4096
 
     public init() {}
 
@@ -270,6 +278,7 @@ public struct CaptionScreen: Equatable, Sendable {
 
     public mutating func clear() {
         frame.glyphs.removeAll()
+        cellIndex.removeAll()
         hasPosition = false
     }
 
@@ -370,6 +379,7 @@ public struct CaptionScreen: Equatable, Sendable {
             ensurePosition()
             let top = y - cellH, x0 = x
             frame.glyphs.removeAll { $0.y + $0.height > top + 0.5 && $0.y < y - 0.5 && $0.x >= x0 - 0.5 }
+            reindex()
         case .size(let s): size = s
         // Colours are resolved against the palette in effect at designation time.
         case .foreground(let i): fg = color(i)
@@ -402,6 +412,26 @@ public struct CaptionScreen: Equatable, Sendable {
         if x + 0.5 > areaX + areaW { newLine() }
     }
 
+    /// Writing over an occupied cell replaces it. Anything past `maxGlyphs` is dropped: a statement
+    /// without CS can keep writing (the active position runs on past the bottom of the plane).
+    private mutating func store(_ g: CaptionGlyph) {
+        guard abs(g.x) < 1e12, abs(g.y) < 1e12 else { return } // keeps the Int key in range
+        let key = CellKey(x: Int(g.x.rounded()), y: Int(g.y.rounded()))
+        if let i = cellIndex[key] {
+            frame.glyphs[i] = g
+        } else if frame.glyphs.count < Self.maxGlyphs {
+            cellIndex[key] = frame.glyphs.count
+            frame.glyphs.append(g)
+        }
+    }
+
+    private mutating func reindex() {
+        cellIndex.removeAll(keepingCapacity: true)
+        for (i, g) in frame.glyphs.enumerated() {
+            cellIndex[CellKey(x: Int(g.x.rounded()), y: Int(g.y.rounded()))] = i
+        }
+    }
+
     private mutating func put(_ content: CaptionGlyph.Content) {
         // RPC 0 repeats to the end of the line; a line never holds more than areaW / cellW cells
         // (+1 for an active position left of the area), which also bounds a malformed stream.
@@ -417,9 +447,7 @@ public struct CaptionScreen: Equatable, Sendable {
                                  charWidth: charW * sx, charHeight: charH * sy,
                                  foreground: fg, background: bg,
                                  underline: underline, enclosure: enclosure, isSmall: size == .small)
-            // Writing over an occupied cell replaces it.
-            frame.glyphs.removeAll { abs($0.x - g.x) < 0.5 && abs($0.y - g.y) < 0.5 }
-            frame.glyphs.append(g)
+            store(g)
             let row = y
             advance()
             n += 1

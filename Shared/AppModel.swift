@@ -392,8 +392,10 @@ final class AppModel {
 
     private func driverFailed(_ error: BonDriverError, generation gen: Int) {
         guard gen == generation else { return }
-        driver = nil
-        player.stop()
+        // Same teardown as a user disconnect: invalidates the generation (so a scan or EPG grab in
+        // flight on the dead connection does not store its partial result), cancels them and
+        // releases the driver off the main thread.
+        disconnect()
         state = .failed(error.description)
     }
 

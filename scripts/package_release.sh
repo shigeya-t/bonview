@@ -65,14 +65,24 @@ elif [[ -z "${ICLOUD_TEAM:-}" || -z "${PROVISIONING_PROFILE:-}" ]]; then
 fi
 if [[ -n "${ICLOUD_TEAM:-}" ]]; then export ICLOUD_TEAM PROVISIONING_PROFILE=${PROVISIONING_PROFILE:-}; fi
 
+# bundle.sh output goes to a log, shown when it fails.
+bundle() {
+  local log=build/bundle.log
+  if ! scripts/bundle.sh >"$log" 2>&1; then
+    cat "$log" >&2
+    echo "bundle.sh failed (log: $log)" >&2
+    exit 1
+  fi
+}
+
 if [[ -z "$CLOUD_TEAM" ]]; then
-  APP="$OUT/BonView.app" scripts/bundle.sh >/dev/null
+  APP="$OUT/BonView.app" bundle
 else
   # The export re-signs but keeps the code signature flags, so the archived app needs the hardened
   # runtime already.
   ARCHIVE="$OUT/BonView.xcarchive"
   mkdir -p "$ARCHIVE/Products/Applications"
-  HARDENED_RUNTIME=1 APP="$ARCHIVE/Products/Applications/BonView.app" scripts/bundle.sh >/dev/null
+  HARDENED_RUNTIME=1 APP="$ARCHIVE/Products/Applications/BonView.app" bundle
   plist() { /usr/libexec/PlistBuddy -c "Print :$1" macOS/Resources/Info.plist; }
   cat > "$ARCHIVE/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

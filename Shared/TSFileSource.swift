@@ -18,10 +18,22 @@ final class TSFileSource: @unchecked Sendable {
     }
 
     func start() throws {
-        let handle = try FileHandle(forReadingFrom: url)
+        // Files picked on iOS (and sandboxed URLs) are security-scoped: keep access while reading.
+        let url = self.url
+        let scoped = url.startAccessingSecurityScopedResource()
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: url)
+        } catch {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            throw error
+        }
         lock.lock(); running = true; lock.unlock()
         let t = Thread { [weak self] in
-            defer { try? handle.close() }
+            defer {
+                try? handle.close()
+                if scoped { url.stopAccessingSecurityScopedResource() }
+            }
             let chunk = 188 * 256
             var pacer = PCRPacer()
             while let self, self.isRunning {

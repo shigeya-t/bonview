@@ -71,6 +71,11 @@ struct TVDecoder {
     float *abuf;
     int abufCap;
 
+    // Parser input: a copy of each fed chunk followed by AV_INPUT_BUFFER_PADDING_SIZE zero bytes
+    // (av_parser_parse2 and the decoders may read that far past the end).
+    uint8_t *inBuf;
+    int inCap;
+
     tv_video_callback vcb;
     void *vctx;
     tv_audio_callback acb;
@@ -170,6 +175,7 @@ void tv_decoder_destroy(TVDecoder *d) {
     av_frame_free(&d->frame);
     av_frame_free(&d->filtFrame);
     free(d->abuf);
+    av_free(d->inBuf);
     free(d);
 }
 
@@ -393,6 +399,21 @@ static void decode_packet(TVDecoder *d, AVPacket *pkt) {
 int tv_decoder_feed(TVDecoder *d, const uint8_t *data, int size, int64_t pts, int64_t dts) {
     int64_t p = pts == TV_NOPTS ? AV_NOPTS_VALUE : pts;
     int64_t q = dts == TV_NOPTS ? AV_NOPTS_VALUE : dts;
+    if (!d || (!data && size > 0)) return AVERROR(EINVAL);
+    if (!d->parser || size <= 0) return size < 0 ? AVERROR(EINVAL) : 0;
+    if (size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) return AVERROR(EINVAL);
+    if (d->inCap < size + AV_INPUT_BUFFER_PADDING_SIZE) {
+        int cap = size + AV_INPUT_BUFFER_PADDING_SIZE;
+        if (cap < INT_MAX / 2) cap *= 2;
+        uint8_t *buf = av_malloc(cap);
+        if (!buf) return AVERROR(ENOMEM);
+        av_free(d->inBuf);
+        d->inBuf = buf;
+        d->inCap = cap;
+    }
+    memcpy(d->inBuf, data, size);
+    memset(d->inBuf + size, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+    data = d->inBuf;
     while (size > 0) {
         uint8_t *out = NULL;
         int outSize = 0;

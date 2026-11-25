@@ -46,11 +46,12 @@ enum CloudSettings {
 
     /// Start syncing (idempotent). Runs before the app model reads its settings.
     static func start() {
-        guard sync == nil, isEnabled, Bundle.main.bundleIdentifier != nil else { return }
+        guard sync == nil, Bundle.main.bundleIdentifier != nil else { return }
         let store = NSUbiquitousKeyValueStore.default
-        // false without the iCloud entitlement (ad-hoc builds, `swift run`).
+        // false without the iCloud entitlement (ad-hoc builds, `swift run`). Checked even while
+        // syncing is off, so the settings toggle can turn it back on.
         isAvailable = store.synchronize()
-        guard isAvailable else { return }
+        guard isAvailable, isEnabled else { return }
         let s = SettingsSync(local: UserDefaults.standard, cloud: store, isSynced: isSynced,
                              merge: ["profiles": mergeProfiles])
         sync = s
