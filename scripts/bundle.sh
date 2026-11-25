@@ -32,7 +32,8 @@ if [[ -z "${FFMPEG_PREFIX:-}" ]]; then
   scripts/build_ffmpeg.sh
   export FFMPEG_PREFIX="$PWD/build/ffmpeg"
 fi
-swift build -c "$CONFIG" --product BonView 2>&1 | grep -v "ld: warning" || true
+# awk (not grep -v) exits 0 even when it filters everything, so pipefail reports only a failing build.
+swift build -c "$CONFIG" --product BonView 2>&1 | awk '!/ld: warning/'
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/BonView"
 [[ -x "$BIN" ]] || { echo "build failed" >&2; exit 1; }
 
