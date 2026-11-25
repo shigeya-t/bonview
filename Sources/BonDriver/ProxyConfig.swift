@@ -89,7 +89,7 @@ public struct ProxyConfig: Codable, Hashable, Sendable {
             if values[key] == nil { values[key] = value }
         }
         guard let address = values["ADDRESS"], !address.isEmpty else { throw ParseError.missing("ADDRESS") }
-        guard let portStr = values["PORT"], let port = UInt16(portStr) else { throw ParseError.missing("PORT") }
+        guard let portStr = values["PORT"], let port = UInt16(portStr), port != 0 else { throw ParseError.missing("PORT") }
         guard let driver = values["BONDRIVER"], !driver.isEmpty else { throw ParseError.missing("BONDRIVER") }
 
         var cfg = ProxyConfig(address: address, port: port, bonDriver: driver)
@@ -98,18 +98,22 @@ public struct ProxyConfig: Codable, Hashable, Sendable {
         if let v = values["TSPACKET_BUFSIZE"], let n = Int(v), n > 0 { cfg.tsPacketBufSize = min(n, ProxyConfig.maxTsPacketBufSize) }
         if let v = values["B25"], let n = Int(v) { cfg.requestB25 = n != 0 }
         if let v = values["USE_MAGICPACKET"], let n = Int(v) { cfg.useMagicPacket = n != 0 }
-        if let mac = values["TARGET_MACADDRESS"] {
+        // Empty values (a commented-out template) mean "not set".
+        if let mac = values["TARGET_MACADDRESS"], !mac.isEmpty {
             guard let bytes = parseMAC(mac) else { throw ParseError.invalidMAC(mac) }
             cfg.macAddress = bytes
         }
-        cfg.magicPacketAddress = values["TARGET_ADDRESS"]
-        if let v = values["TARGET_PORT"] { cfg.magicPacketPort = UInt16(v) }
+        if let v = values["TARGET_ADDRESS"], !v.isEmpty { cfg.magicPacketAddress = v }
+        if let v = values["TARGET_PORT"], let p = UInt16(v), p != 0 { cfg.magicPacketPort = p }
         if cfg.useMagicPacket && cfg.macAddress == nil { throw ParseError.missing("TARGET_MACADDRESS") }
         return cfg
     }
 
     /// Accepts `AA-BB-CC-DD-EE-FF`, `AA:BB:...` or `AABBCCDDEEFF`.
     public static func parseMAC(_ s: String) -> [UInt8]? {
+        // Only hex digits and the usual separators: anything else is a typo, not noise to skip.
+        let separators: Set<Character> = ["-", ":", ".", " "]
+        guard s.allSatisfy({ $0.isHexDigit || separators.contains($0) }) else { return nil }
         let hex = s.filter { $0.isHexDigit }
         guard hex.count == 12 else { return nil }
         var out: [UInt8] = []

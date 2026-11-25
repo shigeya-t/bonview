@@ -18,10 +18,21 @@ usage: bdpcat [--tunnel] [-c conf] [-a address] [-p port] -d bondriver [--lock N
               (--list | --scan [--space S] | --epg [--space S] | --space S --channel C [-t seconds] [-o file|-] [--info])
 """
 
+/// The open connection: released before every exit (a top-level `defer` does not run on `exit`).
+nonisolated(unsafe) var connection: BonDriver?
+
+func finish(_ code: Int32) -> Never {
+    connection?.release()
+    exit(code)
+}
+
 func fail(_ msg: String) -> Never {
     FileHandle.standardError.write((msg + "\n").data(using: .utf8)!)
-    exit(1)
+    finish(1)
 }
+
+// `bdpcat ... -o - | head` must end quietly when the reader goes away, not die of SIGPIPE.
+signal(SIGPIPE, SIG_IGN)
 
 var args = Array(CommandLine.arguments.dropFirst())
 var config = ProxyConfig()
@@ -34,6 +45,8 @@ var list = false, info = false, scan = false, epg = false
 var space: UInt32?, channel: UInt32?
 var seconds: Double = 0
 var output: String?
+/// Options given on the command line win over the configuration file.
+var overrides: [(inout ProxyConfig, inout TunnelConfig) -> Void] = []
 
 func next() -> String {
     guard !args.isEmpty else { fail(usage) }
@@ -44,11 +57,14 @@ while !args.isEmpty {
     switch args.removeFirst() {
     case "--tunnel": useTunnel = true
     case "-c", "--config": configPath = next()
-    case "-a", "--address": let a = next(); config.address = a; tunnel.address = a
-    case "-p", "--port": let p = UInt16(next()) ?? 1192; config.port = p; tunnel.port = p; portSet = true
-    case "-d", "--bondriver": let d = next(); config.bonDriver = d; tunnel.origin = d; haveDriver = true
-    case "--lock": config.channelLock = UInt8(next()) ?? 0
-    case "--no-b25": config.requestB25 = false
+    case "-a", "--address": let a = next(); overrides.append { $0.address = a; $1.address = a }
+    case "-p", "--port":
+        guard let p = UInt16(next()), p != 0 else { fail(usage) }
+        overrides.append { $0.port = p; $1.port = p }
+        portSet = true
+    case "-d", "--bondriver": let d = next(); overrides.append { $0.bonDriver = d; $1.origin = d }; haveDriver = true
+    case "--lock": let n = UInt8(next()) ?? 0; overrides.append { c, _ in c.channelLock = n }
+    case "--no-b25": overrides.append { c, _ in c.requestB25 = false }
     case "--list": list = true
     case "--scan": scan = true
     case "--epg": epg = true; scan = true
@@ -75,16 +91,17 @@ if let path = configPath {
     } catch { fail("\(path): \(error)") }
 }
 if useTunnel && !portSet && configPath == nil { tunnel.port = 1193 }
+for apply in overrides { apply(&config, &tunnel) }
 guard haveDriver else { fail(usage) }
 
 let client: BonDriver
 do {
     client = useTunnel ? try TunnelClient.connect(config: tunnel) : try ProxyClient.connect(config: config)
+    connection = client
     try client.openTuner()
 } catch {
     fail("\(error)")
 }
-defer { client.release() }
 
 if list {
     for s in client.enumerateChannels() {
@@ -92,7 +109,7 @@ if list {
         for c in s.channels { print("    \(c.index): \(c.name)") }
     }
     print("devices: \(client.activeDeviceNum)/\(client.totalDeviceNum)")
-    exit(0)
+    finish(0)
 }
 
 if scan {
@@ -118,7 +135,7 @@ if scan {
         }
     }
     print("\(found.count) channel(s) found")
-    guard epg else { exit(0) }
+    guard epg else { finish(0) }
 
     let grabber = EPGGrabber()
     client.tsHandler = { grabber.feed($0) }
@@ -146,7 +163,7 @@ if scan {
             }
         }
     }
-    exit(0)
+    finish(0)
 }
 
 guard let space, let channel else { fail(usage) }
@@ -165,12 +182,21 @@ let demux = TSDemuxer()
 let demuxQueue = DispatchQueue(label: "demux")
 let lock = NSLock()
 var total = 0
+/// Set from the receive thread: a broken pipe / write error, or the connection failing.
+var stopReason: String?
 client.tsHandler = { data in
-    lock.lock(); total += data.count; lock.unlock()
-    out?.write(data)
+    lock.lock(); total += data.count; let stopped = stopReason != nil; lock.unlock()
+    if stopped { return }
+    if let out {
+        do { try out.write(contentsOf: data) } catch {
+            lock.lock(); stopReason = "output: \(error.localizedDescription)"; lock.unlock()
+            return
+        }
+    }
     if info { demuxQueue.async { demux.feed(data) } }
 }
-client.errorHandler = { fail("\($0)") }
+// Called on the receive thread: just flag it, the main loop releases and exits.
+client.errorHandler = { e in lock.lock(); stopReason = "\(e)"; lock.unlock() }
 
 switch try? client.setChannel(space: space, channel: channel) {
 case .tuned?: break
@@ -182,7 +208,8 @@ let log = FileHandle.standardError
 let start = Date()
 while seconds <= 0 || Date().timeIntervalSince(start) < seconds {
     sleep(1)
-    lock.lock(); let bytes = total; lock.unlock()
+    lock.lock(); let bytes = total; let reason = stopReason; lock.unlock()
+    if let reason { log.write("\n".data(using: .utf8)!); fail(reason) }
     let elapsed = Date().timeIntervalSince(start)
     log.write(String(format: "\r%6.1fs  %8.2f MB  %.2f Mbps  signal %.2f dB ",
                      elapsed, Double(bytes) / 1e6, Double(bytes) * 8 / elapsed / 1e6, client.signalLevel).data(using: .utf8)!)
@@ -200,3 +227,4 @@ if info {
         if let ev = demux.presentEvent { print("  現在: \(ev.title)") }
     }
 }
+finish(0)

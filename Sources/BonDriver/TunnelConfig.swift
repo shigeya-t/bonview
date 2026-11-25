@@ -52,7 +52,7 @@ public struct TunnelConfig: Codable, Hashable, Sendable {
         }
         guard let address = values["ADDRESS"], !address.isEmpty else { throw ParseError.missing("ADDRESS") }
         var cfg = TunnelConfig(address: address)
-        if let v = values["PORT"], let p = UInt16(v) { cfg.port = p }
+        if let v = values["PORT"], let p = UInt16(v), p != 0 { cfg.port = p }
         if let v = values["CONNECT_TIMEOUT"], let n = Int(v), n > 0 { cfg.connectTimeout = n }
         if let v = values["SEND_RECV_TIMEOUT"], let n = Int(v), n > 0 { cfg.sendRecvTimeout = n }
         if let o = values["ORIGIN"], !o.isEmpty {

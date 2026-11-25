@@ -13,6 +13,13 @@ final class TCPSocket: @unchecked Sendable {
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, socklen_t(MemoryLayout<Int32>.size))
+        // A server that vanished (power loss, network change) is noticed after about a minute
+        // even while only receiving.
+        setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &on, socklen_t(MemoryLayout<Int32>.size))
+        var idle: Int32 = 30, interval: Int32 = 10, count: Int32 = 3
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, &idle, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, &interval, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, &count, socklen_t(MemoryLayout<Int32>.size))
     }
 
     deinit { close() }
@@ -72,6 +79,12 @@ final class TCPSocket: @unchecked Sendable {
         var tv = timeval(tv_sec: min(max(seconds, 1), 3600), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+    }
+
+    /// SO_SNDTIMEO only (for connections whose reader legitimately waits for long periods).
+    func setSendTimeout(_ seconds: Int) {
+        var tv = timeval(tv_sec: min(max(seconds, 1), 3600), tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
     }
 
     func readExactly(_ count: Int) throws -> Data {
