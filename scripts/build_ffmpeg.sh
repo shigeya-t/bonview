@@ -8,6 +8,9 @@
 # --disable-autodetect keeps it from picking up Homebrew libraries, so the result depends only on
 # system frameworks. Dylibs get `@rpath/…` install names; bundle.sh copies them to Contents/Frameworks.
 # No GPL or nonfree parts are enabled, so the libraries stay LGPL 2.1+.
+# FFmpeg embeds its configure line in libavutil (avutil_configuration), so configure gets a neutral
+# --prefix and the install is staged with DESTDIR and moved into build/ffmpeg: no local path ends up
+# in the released dylibs.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,6 +20,8 @@ MIN_MACOS=14.0
 
 SRC_DIR=build/ffmpeg-src
 PREFIX="$PWD/build/ffmpeg"
+CONFIG_PREFIX=/usr/local
+STAGE="$PWD/$SRC_DIR/stage"
 TARBALL="$SRC_DIR/ffmpeg-$FFMPEG_VERSION.tar.xz"
 
 if [[ -f "$PREFIX/.version" && "$(<"$PREFIX/.version")" == "$FFMPEG_VERSION" && -z "${FORCE:-}" ]]; then
@@ -33,7 +38,7 @@ fi
 echo "$FFMPEG_SHA256  $TARBALL" | shasum -a 256 -c - >/dev/null || { echo "checksum mismatch: $TARBALL" >&2; exit 1; }
 
 WORK="$SRC_DIR/ffmpeg-$FFMPEG_VERSION"
-rm -rf "$WORK" "$PREFIX"
+rm -rf "$WORK" "$PREFIX" "$STAGE"
 tar xJf "$TARBALL" -C "$SRC_DIR"
 
 ASM=()
@@ -42,7 +47,7 @@ ASM=()
 (
   cd "$WORK"
   ./configure \
-    --prefix="$PREFIX" \
+    --prefix="$CONFIG_PREFIX" \
     --install-name-dir='@rpath' \
     --enable-shared --disable-static \
     --disable-programs --disable-doc --disable-debug \
@@ -59,8 +64,10 @@ ASM=()
     "${ASM[@]}" \
     >../configure.log || { tail -30 ../configure.log ffbuild/config.log >&2; exit 1; }
   make -j"$(sysctl -n hw.ncpu)" >../make.log 2>&1 || { tail -40 ../make.log >&2; exit 1; }
-  make install >>../make.log 2>&1
+  make install DESTDIR="$STAGE" >>../make.log 2>&1
 )
+mv "$STAGE$CONFIG_PREFIX" "$PREFIX"
+rm -rf "$STAGE"
 
 # License texts for the app bundle (LGPL: the user may replace these dylibs).
 mkdir -p "$PREFIX/share/licenses"

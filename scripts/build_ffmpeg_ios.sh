@@ -7,6 +7,8 @@
 # (arm64) and the iOS Simulator (arm64). The libraries stay dynamic (one .framework each, embedded
 # in BonView.app/Frameworks) so they can be replaced, as the LGPL requires. Package.swift picks the
 # XCFrameworks up as binary targets for iOS when they exist.
+# As on macOS, configure gets a neutral --prefix (it is embedded in libavutil) and the install is staged
+# with DESTDIR, so no local path ends up in the frameworks.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -40,7 +42,8 @@ mkdir -p "$OUT"
 build_slice() {
   local sdk=$1 triple=$2 platform=$3
   local work="$SRC_DIR/ios-$sdk/ffmpeg-$FFMPEG_VERSION"
-  local prefix="$OUT/$sdk/prefix"
+  local stage="$OUT/$sdk/stage"
+  local prefix="$stage/usr/local"
   local fwdir="$OUT/$sdk/frameworks"
   rm -rf "$SRC_DIR/ios-$sdk"
   mkdir -p "$SRC_DIR/ios-$sdk" "$fwdir"
@@ -52,7 +55,7 @@ build_slice() {
   (
     cd "$work"
     ./configure \
-      --prefix="$prefix" \
+      --prefix=/usr/local \
       --install-name-dir='@rpath' \
       --enable-cross-compile --target-os=darwin --arch=aarch64 \
       --cc="$cc" --sysroot="$sysroot" \
@@ -70,7 +73,7 @@ build_slice() {
       --extra-ldflags="-target $triple" \
       >../configure.log || { tail -30 ../configure.log ffbuild/config.log >&2; exit 1; }
     make -j"$(sysctl -n hw.ncpu)" >../make.log 2>&1 || { tail -40 ../make.log >&2; exit 1; }
-    make install >>../make.log 2>&1
+    make install DESTDIR="$stage" >>../make.log 2>&1
   )
 
   # Wrap each dylib in a framework: <lib>.framework/{<lib>, Headers/, Info.plist}, install name
