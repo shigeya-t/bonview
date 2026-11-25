@@ -4,7 +4,7 @@ import MediaCore
 import SwiftUI
 import TSCore
 
-/// Panel under (or beside) the picture: チャンネル / 番組 / 音声 / 情報.
+/// Panel under (or beside) the picture: server switcher, then チャンネル / 番組 / 音声 / 情報.
 struct PanelView: View {
     enum Tab: String, CaseIterable, Identifiable {
         case channel = "チャンネル"
@@ -15,9 +15,11 @@ struct PanelView: View {
     }
 
     @AppStorage("panelTab") private var tab: Tab = .channel
+    var openSettings: () -> Void = {}
 
     var body: some View {
         VStack(spacing: 0) {
+            ServerBar(openSettings: openSettings)
             Picker("", selection: $tab) {
                 ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
             }
@@ -31,6 +33,78 @@ struct PanelView: View {
             case .audio: AudioCaptionView()
             case .info: InfoPanel()
             }
+        }
+    }
+}
+
+// MARK: - Server
+
+/// Current server and connection state; the menu switches servers, connects and disconnects.
+private struct ServerBar: View {
+    @Environment(AppModel.self) private var model
+    var openSettings: () -> Void
+
+    var body: some View {
+        Menu {
+            if !model.profiles.isEmpty {
+                Section("サーバーを切り替え") {
+                    ForEach(model.profiles) { p in
+                        Button {
+                            model.connect(p)
+                        } label: {
+                            if p.id == model.currentProfile?.id {
+                                Label(p.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(p.displayName)
+                            }
+                        }
+                    }
+                }
+                Section {
+                    switch model.state {
+                    case .connected, .connecting:
+                        Button("切断", systemImage: "bolt.horizontal.circle", role: .destructive) { model.disconnect() }
+                    default:
+                        Button("再接続", systemImage: "arrow.clockwise") { model.connect() }
+                    }
+                }
+            }
+            Button("サーバーの設定…", systemImage: "gearshape") { openSettings() }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "server.rack").foregroundStyle(.secondary)
+                Text(model.currentProfile?.displayName ?? "サーバー未登録")
+                    .fontWeight(.semibold).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Circle().fill(stateColor).frame(width: 8, height: 8)
+                Text(stateText).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("サーバー: \(model.currentProfile?.displayName ?? "未登録")、\(stateText)")
+    }
+
+    private var stateText: String {
+        switch model.state {
+        case .idle: "未接続"
+        case .connecting: "接続中…"
+        case .connected: "接続済み"
+        case .playingFile: "ファイル再生中"
+        case .failed: "接続エラー"
+        }
+    }
+
+    private var stateColor: Color {
+        switch model.state {
+        case .connected: .green
+        case .connecting: .yellow
+        case .failed: .red
+        case .idle, .playingFile: .gray
         }
     }
 }
@@ -220,7 +294,7 @@ private struct ProgramInfoView: View {
     }
 }
 
-// MARK: - Services, audio and captions
+// MARK: - Audio, captions, volume and services (services last: rarely needed)
 
 private struct AudioCaptionView: View {
     @Environment(AppModel.self) private var model
@@ -228,29 +302,6 @@ private struct AudioCaptionView: View {
     var body: some View {
         @Bindable var model = model
         Form {
-            if model.services.count > 1 {
-                Section("サービス") {
-                    ForEach(model.services, id: \.serviceID) { svc in
-                        Button {
-                            model.selectService(svc.serviceID)
-                        } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    Text(svc.displayName)
-                                    Text(String(format: "SID %d%@", svc.serviceID, svc.isOneSeg ? " ・ワンセグ" : ""))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if svc.serviceID == model.selection?.serviceID {
-                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
-                                }
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
             if let sel = model.selection, sel.audioStreams.count > 1 {
                 Section("音声") {
                     let labels = model.audioStreamLabels
@@ -291,6 +342,29 @@ private struct AudioCaptionView: View {
                     Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
                 }
                 Toggle("消音", isOn: $model.isMuted)
+            }
+            if model.services.count > 1 {
+                Section("サービス") {
+                    ForEach(model.services, id: \.serviceID) { svc in
+                        Button {
+                            model.selectService(svc.serviceID)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(svc.displayName)
+                                    Text(String(format: "SID %d%@", svc.serviceID, svc.isOneSeg ? " ・ワンセグ" : ""))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if svc.serviceID == model.selection?.serviceID {
+                                    Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
             }
         }
     }
