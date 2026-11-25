@@ -109,9 +109,9 @@ extension AppModel {
                     p.error = "空きチューナーがないため、チャンネルを切り替えられませんでした"
                 }
                 self.epgGrab = p
-                if failure == nil && !cancelled, let profile = self.currentProfile {
+                if failure == nil && !cancelled && p.error == nil, let id = self.epgProfileID {
                     self.epgLastGrab = Date()
-                    Preferences.setEPGLastGrab(Date(), for: profile.id)
+                    Preferences.setEPGLastGrab(Date(), for: id)
                 }
                 self.saveEPG()
             }
@@ -182,49 +182,85 @@ extension AppModel {
 
     // MARK: - Persistence
 
-    func loadEPG(_ profile: ServerProfile) {
+    /// Reads, writes and removals of guide files, in order (a load never overtakes a save or a
+    /// clear of the same file).
+    static let epgFileQueue = DispatchQueue(label: "bonview.epg-files", qos: .utility)
+
+    /// Empty guide for `profile`, dropping a load in flight and what the viewing stream collected
+    /// so far (it may belong to the previous profile).
+    func resetEPG(profile: UUID?) {
         epg = EPGStore()
         epgPending = EPGStore()
         epgDirty = false
         epgGrab = nil
+        epgProfileID = profile
+        epgLoaded = true
+        epgLoadToken += 1
+        // Not just the stream state: sections seen before would otherwise be skipped as duplicates
+        // and the cleared guide would not fill again from the channel being watched.
+        passiveEPG.resetAll()
+    }
+
+    func loadEPG(_ profile: ServerProfile) {
+        resetEPG(profile: profile.id)
         epgLastGrab = Preferences.epgLastGrab(for: profile.id)
+        epgLoaded = false
         let url = Preferences.epgURL(for: profile.id)
-        let gen = generation
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let data = try? Data(contentsOf: url) else { return }
-            let decoded: EPGStore
-            do {
-                decoded = try JSONDecoder().decode(EPGStore.self, from: data)
-            } catch is EPGStore.StaleData {
+        let token = epgLoadToken
+        Self.epgFileQueue.async { [weak self] in
+            let result = Self.readEPG(url)
+            if case .stale = result {
                 // Saved by an older text decoder (e.g. before gaiji support): drop it and re-grab.
                 try? FileManager.default.removeItem(at: url)
-                Preferences.setEPGLastGrab(nil, for: profile.id)
-                DispatchQueue.main.async {
-                    guard let self, self.generation == gen else { return }
-                    self.epgLastGrab = nil
-                }
-                return
-            } catch {
-                return
             }
-            var store = decoded
-            store.prune(before: Date().addingTimeInterval(-3 * 3600))
             DispatchQueue.main.async {
-                guard let self, self.generation == gen else { return }
-                store.merge(self.epg)
-                self.epg = store
+                guard let self, self.epgLoadToken == token else { return }
+                self.epgLoaded = true
+                switch result {
+                case .stale:
+                    Preferences.setEPGLastGrab(nil, for: profile.id)
+                    self.epgLastGrab = nil
+                case .loaded(var store):
+                    store.merge(self.epg)
+                    self.epg = store
+                case .none:
+                    break
+                }
             }
         }
     }
 
+    private enum EPGFile {
+        case none, stale, loaded(EPGStore)
+    }
+
+    private static func readEPG(_ url: URL) -> EPGFile {
+        guard let data = try? Data(contentsOf: url) else { return .none }
+        do {
+            var store = try JSONDecoder().decode(EPGStore.self, from: data)
+            store.prune(before: Date().addingTimeInterval(-3 * 3600))
+            return .loaded(store)
+        } catch is EPGStore.StaleData {
+            return .stale
+        } catch {
+            return .none
+        }
+    }
+
     func saveEPG() {
-        guard epgDirty, let profile = currentProfile else { return }
+        guard epgDirty, let id = epgProfileID else { return }
         publishEPG(force: true)
         epgDirty = false
         epgLastSave = Date()
         var store = epg
-        let url = Preferences.epgURL(for: profile.id)
-        DispatchQueue.global(qos: .utility).async {
+        let mergeIntoFile = !epgLoaded
+        let url = Preferences.epgURL(for: id)
+        Self.epgFileQueue.async {
+            if mergeIntoFile, case .loaded(var saved) = Self.readEPG(url) {
+                // The saved guide was not loaded yet (disconnected right after connecting).
+                saved.merge(store)
+                store = saved
+            }
             store.prune(before: Date().addingTimeInterval(-3 * 3600))
             guard let data = try? JSONEncoder().encode(store) else { return }
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -233,15 +269,17 @@ extension AppModel {
     }
 
     func clearEPG() {
-        guard let profile = currentProfile else { return }
+        guard let id = epgProfileID ?? currentProfile?.id else { return }
         cancelEPGGrab()
-        epg = EPGStore()
-        epgPending = EPGStore()
-        epgDirty = false
+        resetEPG(profile: id)
         epgLastGrab = nil
-        epgGrab = nil
-        Preferences.setEPGLastGrab(nil, for: profile.id)
-        try? FileManager.default.removeItem(at: Preferences.epgURL(for: profile.id))
+        Preferences.setEPGLastGrab(nil, for: id)
+        Self.removeEPGFile(for: id)
+    }
+
+    static func removeEPGFile(for profile: UUID) {
+        let url = Preferences.epgURL(for: profile)
+        epgFileQueue.async { try? FileManager.default.removeItem(at: url) }
     }
 }
 

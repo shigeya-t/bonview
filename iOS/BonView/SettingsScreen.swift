@@ -23,9 +23,9 @@ struct SettingsScreen: View {
         NavigationStack {
             Form {
                 Section {
-                    ForEach($model.profiles) { $profile in
+                    ForEach(model.profiles) { profile in
                         NavigationLink {
-                            ProfileScreen(profile: $profile)
+                            ProfileScreen(profile: model.profileBinding(profile))
                         } label: {
                             HStack {
                                 VStack(alignment: .leading, spacing: 2) {

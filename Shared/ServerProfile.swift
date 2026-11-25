@@ -98,7 +98,15 @@ enum Preferences {
     }
 
     static func saveProfiles(_ list: [ServerProfile]) {
-        if let data = try? JSONEncoder().encode(list) { set(data, forKey: profilesKey) }
+        if let data = try? encoder.encode(list) { set(data, forKey: profilesKey) }
+    }
+
+    /// Sorted keys: the same value always encodes to the same bytes, so a value that came from
+    /// iCloud and is written back unchanged is not sent again.
+    static var encoder: JSONEncoder {
+        let e = JSONEncoder()
+        e.outputFormatting = .sortedKeys
+        return e
     }
 
     static var currentProfileID: UUID? {
@@ -116,13 +124,32 @@ enum Preferences {
         set("\(ch.0)-\(ch.1)", forKey: "lastChannel.\(profile)")
     }
 
+    /// Last service per physical channel, one dictionary per profile ("<space>-<ch>" → SID).
+    /// (Earlier versions used one `lastService.<profile>.<space>-<ch>` key per channel, which
+    /// added up towards iCloud's 1,024-key limit; those are still read.)
     static func lastService(for profile: UUID, space: UInt32, channel: UInt32) -> UInt16? {
-        let v = UserDefaults.standard.integer(forKey: "lastService.\(profile).\(space)-\(channel)")
+        let all = UserDefaults.standard.dictionary(forKey: "lastServices.\(profile)") as? [String: Int] ?? [:]
+        let v = all["\(space)-\(channel)"] ?? UserDefaults.standard.integer(forKey: "lastService.\(profile).\(space)-\(channel)")
         return v > 0 ? UInt16(clamping: v) : nil
     }
 
     static func setLastService(_ sid: UInt16, for profile: UUID, space: UInt32, channel: UInt32) {
-        set(Int(sid), forKey: "lastService.\(profile).\(space)-\(channel)")
+        let key = "lastServices.\(profile)"
+        var all = UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
+        guard all["\(space)-\(channel)"] != Int(sid) else { return }
+        all["\(space)-\(channel)"] = Int(sid)
+        set(all, forKey: key)
+    }
+
+    /// Everything stored for a deleted profile (removals of synced keys reach iCloud too).
+    static func removeData(for profile: UUID) {
+        for prefix in ["scan.", "channelOrder.", "hiddenChannels.", "knownChannels.", "lastChannel.", "lastServices.", "epgLastGrab."] {
+            set(nil, forKey: prefix + profile.uuidString)
+        }
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("lastService.\(profile).") {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        AppModel.removeEPGFile(for: profile)
     }
 
     static func scanResult(for profile: UUID) -> [ScannedChannel] {
@@ -134,7 +161,7 @@ enum Preferences {
     static func setScanResult(_ list: [ScannedChannel], for profile: UUID) {
         if list.isEmpty {
             set(nil, forKey: "scan.\(profile)")
-        } else if let data = try? JSONEncoder().encode(list) {
+        } else if let data = try? encoder.encode(list) {
             set(data, forKey: "scan.\(profile)")
         }
     }

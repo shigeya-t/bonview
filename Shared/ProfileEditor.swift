@@ -156,3 +156,17 @@ private extension View {
         #endif
     }
 }
+
+extension AppModel {
+    /// Binding to a server found by ID, not by index: an editor left open while the list changes
+    /// (deleted here, or by iCloud from another device) neither crashes nor edits another server.
+    func profileBinding(_ profile: ServerProfile) -> Binding<ServerProfile> {
+        let id = profile.id
+        return Binding(
+            get: { [weak self] in self?.profiles.first { $0.id == id } ?? profile },
+            set: { [weak self] new in
+                guard let self, let i = self.profiles.firstIndex(where: { $0.id == id }) else { return }
+                self.profiles[i] = new
+            })
+    }
+}

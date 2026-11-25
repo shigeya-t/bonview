@@ -22,6 +22,8 @@ final class PictureInPicture: NSObject {
     /// Read by the playback delegate, which AVKit may call off the main thread.
     @ObservationIgnored private let pausedLock = NSLock()
     @ObservationIgnored nonisolated(unsafe) private var paused = true
+    /// The user paused in the PiP window (the stream was released).
+    @ObservationIgnored var onUserStop: (() -> Void)?
 
     init(model: AppModel) {
         self.model = model
@@ -81,11 +83,12 @@ final class PictureInPicture: NSObject {
     private func setPlaying(_ playing: Bool) {
         if playing {
             if !isPlaying, model.currentProfile != nil {
-                NowPlaying.configureAudioSession()
+                NowPlaying.activateAudioSession()
                 model.connect()
             }
         } else if isPlaying {
             model.disconnect()
+            onUserStop?()
         }
     }
 
@@ -96,6 +99,20 @@ final class PictureInPicture: NSObject {
             model.player.setVideoEnabled(true)
         } else if UIApplication.shared.applicationState == .background {
             model.player.setVideoEnabled(false)
+            // PiP closed in the background with background playback off: release the tuner as
+            // going to the background would have (reconnects on return).
+            let backgroundPlayback = UserDefaults.standard.object(forKey: "backgroundPlayback") as? Bool ?? true
+            if !backgroundPlayback, isPlaying { model.disconnect() }
+        }
+    }
+
+    /// AVKit calls the delegates on the main thread; this keeps them in order (a `Task` each
+    /// would not) and still works if one comes from elsewhere.
+    nonisolated private func onMain(_ body: @escaping @MainActor () -> Void) {
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(body)
+        } else {
+            DispatchQueue.main.async { MainActor.assumeIsolated(body) }
         }
     }
 }
@@ -103,7 +120,7 @@ final class PictureInPicture: NSObject {
 extension PictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                                 setPlaying playing: Bool) {
-        Task { @MainActor in self.setPlaying(playing) }
+        onMain { self.setPlaying(playing) }
     }
 
     nonisolated func pictureInPictureControllerTimeRangeForPlayback(
@@ -131,17 +148,17 @@ extension PictureInPicture: AVPictureInPictureSampleBufferPlaybackDelegate {
 extension PictureInPicture: AVPictureInPictureControllerDelegate {
     nonisolated func pictureInPictureControllerWillStartPictureInPicture(
         _ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor in self.setActive(true) }
+        onMain { self.setActive(true) }
     }
 
     nonisolated func pictureInPictureControllerDidStopPictureInPicture(
         _ pictureInPictureController: AVPictureInPictureController) {
-        Task { @MainActor in self.setActive(false) }
+        onMain { self.setActive(false) }
     }
 
     nonisolated func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController,
                                                 failedToStartPictureInPictureWithError error: Error) {
-        Task { @MainActor in self.setActive(false) }
+        onMain { self.setActive(false) }
     }
 
     nonisolated func pictureInPictureController(

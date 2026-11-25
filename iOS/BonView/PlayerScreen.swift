@@ -31,24 +31,47 @@ struct PlayerScreen: View {
         @Bindable var model = model
         GeometryReader { geo in
             let landscape = geo.size.width > geo.size.height
-            if isFullScreen || (landscape && verticalSizeClass == .compact) {
-                fullScreen
-            } else if landscape {
-                HStack(spacing: 0) {
-                    VStack(spacing: 0) {
-                        picture.frame(maxHeight: .infinity)
-                        ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
+            let full = isFullScreen || (landscape && verticalSizeClass == .compact)
+            // The layouts only reserve a slot for the picture; the picture itself is one view behind
+            // them, positioned on the slot. Rotating or entering full screen then moves it instead of
+            // making a new video view (which re-parented the display layer: a black flash, and the
+            // PiP source moving between views).
+            ZStack {
+                if full {
+                    fullScreen
+                } else if landscape {
+                    HStack(spacing: 0) {
+                        VStack(spacing: 0) {
+                            pictureSlot.frame(maxHeight: .infinity)
+                            ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
+                        }
+                        Divider()
+                        PanelView(openSettings: { sheet = .settings }).frame(width: min(380, geo.size.width * 0.36))
                     }
-                    Divider()
-                    PanelView(openSettings: { sheet = .settings }).frame(width: min(380, geo.size.width * 0.36))
+                } else {
+                    VStack(spacing: 0) {
+                        pictureSlot.aspectRatio(16 / 9, contentMode: .fit)
+                        ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
+                        Divider()
+                        PanelView(openSettings: { sheet = .settings })
+                    }
                 }
-            } else {
-                VStack(spacing: 0) {
-                    picture.aspectRatio(16 / 9, contentMode: .fit)
-                    ControlBar(sheet: $sheet, isFullScreen: false, toggleFullScreen: enterFullScreen)
-                    Divider()
-                    PanelView(openSettings: { sheet = .settings })
+            }
+            .backgroundPreferenceValue(PictureSlotKey.self) { anchor in
+                // Full-screen slots reach into the safe area; so does this reader, so the picture
+                // (and its taps) are not limited to the safe area.
+                GeometryReader { g in
+                    let r = anchor.map { g[$0] } ?? .zero
+                    picture
+                        .contentShape(Rectangle())
+                        // Only full screen toggles the controls; otherwise the picture's own buttons
+                        // (再接続, 設定を開く) get every tap.
+                        .gesture(TapGesture().onEnded { setControlsVisible(!controlsVisible) },
+                                 including: full ? .all : .subviews)
+                        .frame(width: r.width, height: r.height)
+                        .position(x: r.midX, y: r.midY)
                 }
+                .ignoresSafeArea()
             }
         }
         .sheet(item: $sheet) { s in
@@ -60,6 +83,13 @@ struct PlayerScreen: View {
         .sheet(isPresented: $model.showScanSheet) {
             ChannelScanScreen().environment(model).interactiveDismissDisabled(model.isScanning)
         }
+    }
+
+    /// Where the picture goes in the current layout (see `body`).
+    private var pictureSlot: some View {
+        Color.clear
+            .anchorPreference(key: PictureSlotKey.self, value: .bounds) { $0 }
+            .allowsHitTesting(false)
     }
 
     /// Picture with captions and state messages.
@@ -87,10 +117,8 @@ struct PlayerScreen: View {
 
     private var fullScreen: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
-            picture.ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { setControlsVisible(!controlsVisible) }
+            // Taps on the picture (behind) toggle the controls.
+            pictureSlot.ignoresSafeArea()
             if controlsVisible {
                 VStack(spacing: 0) {
                     FullScreenInfo(exit: exitFullScreen)
@@ -292,7 +320,7 @@ private struct StateOverlay: View {
             ProgressView("チャンネルスキャン中…").controlSize(.large).tint(.white).foregroundStyle(.white)
         case .connected where model.channelLocked:
             banner("チャンネルがロックされています（他のクライアントが使用中）")
-        case .connected where model.status.isScrambled:
+        case .connected where model.isScrambled:
             banner("スクランブルが解除されていません。サーバー側でB25デコードを有効にしてください。")
         case .connected where model.isTuning:
             ProgressView().controlSize(.large).tint(.white)
@@ -337,5 +365,13 @@ private struct GuideScreen: View {
                     }
                 }
         }
+    }
+}
+
+/// Bounds of the picture slot of the current layout.
+private struct PictureSlotKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }

@@ -21,7 +21,11 @@ final class AppModel {
 
     // MARK: Profiles
     var profiles: [ServerProfile] = Preferences.loadProfiles() {
-        didSet { Preferences.saveProfiles(profiles) }
+        didSet {
+            Preferences.saveProfiles(profiles)
+            let removed = Set(oldValue.map(\.id)).subtracting(profiles.map(\.id))
+            if !removed.isEmpty { profilesRemoved(removed) }
+        }
     }
     var currentProfileID: UUID? = Preferences.currentProfileID {
         didSet { Preferences.currentProfileID = currentProfileID }
@@ -133,6 +137,9 @@ final class AppModel {
     /// instead of `status`: any observed change rebuilds the main menu, and rebuilding it while a
     /// menu is open drops the items AppKit adds to the Window menu.
     var isDualMono = false
+    /// `status.isScrambled`, updated only when it changes (the picture overlay reads it; reading
+    /// `status` there would redraw the whole player view every second).
+    private(set) var isScrambled = false
     var videoSize: CGSize = .zero
     /// Caption plane currently on screen.
     var captionFrame = CaptionFrame()
@@ -162,6 +169,13 @@ final class AppModel {
         didSet { Preferences.set(epgAutoGrab, forKey: "epgAutoGrab") }
     }
     @ObservationIgnored var epgGrabber: EPGGrabber?
+    /// The profile whose guide `epg` holds (saved to that profile's file, whatever is current now).
+    @ObservationIgnored var epgProfileID: UUID?
+    /// False until the saved guide has been read and merged into `epg`: a save before then
+    /// merges into the file instead of replacing days of guide with a few minutes of data.
+    @ObservationIgnored var epgLoaded = true
+    /// Bumped to drop the result of a load still in flight (another profile, guide cleared).
+    @ObservationIgnored var epgLoadToken = 0
     @ObservationIgnored let epgQueue = DispatchQueue(label: "bonview.epg-driver", qos: .utility)
     /// EIT from the stream being watched (works with a single tuner, too).
     @ObservationIgnored let passiveEPG = EPGCollector()
@@ -266,6 +280,7 @@ final class AppModel {
             guard let self else { return }
             self.status = s
             if self.isDualMono != s.isDualMono { self.isDualMono = s.isDualMono }
+            if self.isScrambled != s.isScrambled { self.isScrambled = s.isScrambled }
         }
         player.onCaption = { [weak self] in self?.captionFrame = $0 }
         player.onSuperimpose = { [weak self] in self?.superimposeFrame = $0 }
@@ -347,7 +362,11 @@ final class AppModel {
                 try d.openTuner()
                 let spaces = d.enumerateChannels()
                 DispatchQueue.main.async {
-                    guard let self, self.generation == gen else { d.release(); return }
+                    guard let self, self.generation == gen else {
+                        // Superseded (disconnected meanwhile): release off the main thread.
+                        DispatchQueue.global(qos: .utility).async { d.release() }
+                        return
+                    }
                     self.driver = d
                     self.spaces = spaces
                     self.state = .connected
@@ -388,6 +407,33 @@ final class AppModel {
         signalLevel = 0
         channelLocked = false
         if case .failed = state {} else { state = .idle }
+    }
+
+    /// Servers deleted here or on another device: forget their settings, and if one was in use,
+    /// disconnect and move to the first remaining server (nothing of the deleted server is saved
+    /// under another server's ID).
+    private func profilesRemoved(_ ids: Set<UUID>) {
+        if let cur = currentProfileID, ids.contains(cur) {
+            if epgProfileID.map(ids.contains) ?? false {
+                epgDirty = false
+                epgPending = EPGStore()
+            }
+            disconnect()
+            state = .idle
+            currentProfileID = profiles.first?.id
+            if let p = profiles.first {
+                scannedChannels = Preferences.scanResult(for: p.id)
+                channelOrder = Preferences.channelOrder(for: p.id)
+                hiddenEntries = Preferences.hiddenEntries(for: p.id)
+                loadEPG(p)
+            } else {
+                scannedChannels = []
+                channelOrder = []
+                hiddenEntries = []
+                resetEPG(profile: nil)
+            }
+        }
+        for id in ids { Preferences.removeData(for: id) }
     }
 
     private func driverFailed(_ error: BonDriverError, generation gen: Int) {

@@ -15,7 +15,7 @@ enum CloudSettings {
     /// Local-only switch (設定 → iCloud で同期).
     static let enabledKey = "iCloudSync"
     private static let syncedKeys: Set<String> = ["profiles", "currentProfile", "showCaptions", "captionStyle", "epgAutoGrab"]
-    private static let syncedPrefixes = ["scan.", "channelOrder.", "hiddenChannels.", "knownChannels.", "lastChannel.", "lastService."]
+    private static let syncedPrefixes = ["scan.", "channelOrder.", "hiddenChannels.", "knownChannels.", "lastChannel.", "lastServices."]
 
     static func isSynced(_ key: String) -> Bool {
         syncedKeys.contains(key) || syncedPrefixes.contains { key.hasPrefix($0) }
@@ -52,6 +52,7 @@ enum CloudSettings {
         // syncing is off, so the settings toggle can turn it back on.
         isAvailable = store.synchronize()
         guard isAvailable, isEnabled else { return }
+        migrateLastServiceKeys(store)
         let s = SettingsSync(local: UserDefaults.standard, cloud: store, isSynced: isSynced,
                              merge: ["profiles": mergeProfiles])
         sync = s
@@ -80,6 +81,27 @@ enum CloudSettings {
         }
     }
 
+    /// Per-channel keys of earlier versions (`lastService.<profile>.<space>-<ch>` → SID) become one
+    /// `lastServices.<profile>` dictionary each before they are removed, so devices still on an
+    /// older version or not yet migrated don't lose them. Entries already in the new form win.
+    static func migrateLastServiceKeys(_ store: NSUbiquitousKeyValueStore) {
+        let all = store.dictionaryRepresentation
+        var migrated: [String: [String: Int]] = [:]
+        for (key, value) in all where key.hasPrefix("lastService.") {
+            let rest = key.dropFirst("lastService.".count)
+            if let dot = rest.firstIndex(of: "."), let sid = (value as? NSNumber)?.intValue, sid > 0 {
+                migrated["lastServices.\(rest[..<dot])", default: [:]][String(rest[rest.index(after: dot)...])] = sid
+            }
+        }
+        for (key, old) in migrated {
+            let cloud = store.dictionary(forKey: key) as? [String: Int] ?? [:]
+            let local = UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:]
+            let merged = old.merging(cloud) { _, new in new }.merging(local) { _, new in new }
+            if merged != cloud { store.set(merged, forKey: key) }
+        }
+        for key in all.keys where key.hasPrefix("lastService.") { store.removeObject(forKey: key) }
+    }
+
     private static func stop() {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
@@ -99,7 +121,7 @@ enum CloudSettings {
               let cloudList = try? decoder.decode([ServerProfile].self, from: c) else { return cloud }
         let ids = Set(cloudList.map(\.id))
         let merged = cloudList + localList.filter { !ids.contains($0.id) }
-        return (try? JSONEncoder().encode(merged)) ?? cloud
+        return (try? Preferences.encoder.encode(merged)) ?? cloud
     }
 }
 

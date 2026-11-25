@@ -39,20 +39,24 @@ enum OrientationLock {
         // The interface may be landscape while the phone is held upright (full screen was chosen with the
         // button), so always ask for portrait first.
         apply(.portrait)
-        if UIDevice.current.orientation.isPortrait {
-            // Unlock once the rotation has been requested; the device keeps it in portrait.
+        // `orientation` is only kept up to date while notifications are generated.
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        if !UIDevice.current.orientation.isLandscape {
+            // Upright, lying flat or unknown: nothing would rotate it back to landscape. Unlock once
+            // the rotation has been requested (waiting for "portrait" could wait forever).
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
             let g = generation
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
                 if g == generation, locked == .portrait { apply(nil) }
             }
             return
         }
-        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
         observer = NotificationCenter.default.addObserver(
             forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main
         ) { _ in
             MainActor.assumeIsolated {
-                guard UIDevice.current.orientation.isPortrait else { return }
+                // Held upright, or put down flat: unlock.
+                guard !UIDevice.current.orientation.isLandscape, UIDevice.current.orientation != .unknown else { return }
                 stopObserving()
                 apply(nil)
             }

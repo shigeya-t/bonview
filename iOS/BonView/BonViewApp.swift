@@ -29,9 +29,12 @@ struct BonViewApp: App {
                 .onAppear {
                     if nowPlaying == nil {
                         let n = NowPlaying(model: model)
+                        // Stopped by the user while in the background: don't reconnect on return.
+                        n.onUserStop = { resumeOnActive = false }
                         n.start()
                         nowPlaying = n
                         let p = PictureInPicture(model: model)
+                        p.onUserStop = { resumeOnActive = false }
                         p.start()
                         p.setAutomaticStart(backgroundPlayback)
                         pip = p
@@ -43,6 +46,11 @@ struct BonViewApp: App {
                     switch state {
                     case .connected, .playingFile: UIApplication.shared.isIdleTimerDisabled = true
                     default: UIApplication.shared.isIdleTimerDisabled = false
+                    }
+                    // Take the audio (stopping other apps' playback) only when something plays.
+                    switch state {
+                    case .connecting, .connected, .playingFile: NowPlaying.activateAudioSession()
+                    default: break
                     }
                 }
         }
@@ -68,7 +76,10 @@ struct BonViewApp: App {
                 }
             case .active:
                 model.player.setVideoEnabled(true)
-                try? AVAudioSession.sharedInstance().setActive(true)
+                switch model.state {
+                case .connecting, .connected, .playingFile: NowPlaying.activateAudioSession()
+                default: break
+                }
                 // Reconnect if the stream was released, or was lost while in the background.
                 if resumeOnActive {
                     resumeOnActive = false

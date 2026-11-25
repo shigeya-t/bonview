@@ -12,6 +12,7 @@ final class ChromeAutoHider {
     /// The video view: the UI is only hidden while the pointer is over the picture.
     private weak var videoView: NSView?
     private var monitor: Any?
+    private var closeObserver: NSObjectProtocol?
     private var timer: Timer?
     private var hidden = false
 
@@ -29,12 +30,24 @@ final class ChromeAutoHider {
             if event.window == nil || event.window === self?.window { self?.activity() }
             return event
         }
+        // Closing the window in full screen gives no full-screen exit to stop on.
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in self?.stop() }
         schedule()
+    }
+
+    deinit {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        timer?.invalidate()
     }
 
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = nil
         timer?.invalidate()
         timer = nil
         if hidden {
@@ -60,7 +73,8 @@ final class ChromeAutoHider {
     }
 
     private func fire() {
-        guard let window, let videoView, NSApp.isActive, window.isKeyWindow, window.attachedSheet == nil
+        guard let window, let videoView else { return stop() } // window gone
+        guard NSApp.isActive, window.isKeyWindow, window.attachedSheet == nil
         else { return schedule() }
         let p = videoView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
         guard videoView.bounds.contains(p) else { return schedule() }

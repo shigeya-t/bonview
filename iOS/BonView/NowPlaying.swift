@@ -18,16 +18,23 @@ final class NowPlaying {
     /// Something was playing since launch (keeps the app in Control Center after a stop).
     private var hasPlayed = false
     private var lastInfoKey = ""
+    private var observers: [NSObjectProtocol] = []
+    /// The user stopped playback (Control Center, headphones, lock screen).
+    var onUserStop: (() -> Void)?
 
     init(model: AppModel) {
         self.model = model
     }
 
+    /// Category only: activating the session stops other apps' audio, so that waits until
+    /// something plays (`activateAudioSession`).
     static func configureAudioSession() {
-        let session = AVAudioSession.sharedInstance()
         // Long-form video routes: AirPlay speakers / Apple TV, Bluetooth and wired outputs.
-        try? session.setCategory(.playback, mode: .moviePlayback, policy: .longFormVideo)
-        try? session.setActive(true)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormVideo)
+    }
+
+    static func activateAudioSession() {
+        try? AVAudioSession.sharedInstance().setActive(true)
     }
 
     func start() {
@@ -48,18 +55,29 @@ final class NowPlaying {
         }
 
         let nc = NotificationCenter.default
-        nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
+        observers.append(nc.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] n in
             guard let raw = n.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
                   AVAudioSession.InterruptionType(rawValue: raw) == .ended else { return }
+            let options = AVAudioSession.InterruptionOptions(rawValue: n.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0)
             MainActor.assumeIsolated {
-                // Phone call / Siri over: take the audio back and restart the clock.
-                try? AVAudioSession.sharedInstance().setActive(true)
-                self?.model.player.resync()
+                // Phone call / Siri over: take the audio back only when the system says to (the
+                // user may have started other audio meanwhile; play resumes it then).
+                guard let self, self.isPlaying, options.contains(.shouldResume) else { return }
+                self.resume()
             }
-        }
-        nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.applyRouteLatency() }
-        }
+        })
+        observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] n in
+            let reason = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt).flatMap(AVAudioSession.RouteChangeReason.init)
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // Headphones unplugged / Bluetooth gone: stop rather than play out of the speaker.
+                if reason == .oldDeviceUnavailable, self.isPlaying {
+                    _ = self.stop()
+                    return
+                }
+                self.applyRouteLatency()
+            }
+        })
         applyRouteLatency()
         observe()
     }
@@ -73,15 +91,26 @@ final class NowPlaying {
 
     private func play() -> MPRemoteCommandHandlerStatus {
         guard model.currentProfile != nil else { return .noActionableNowPlayingItem }
-        if !isPlaying {
-            Self.configureAudioSession()
+        if isPlaying {
+            // Still connected but the audio was taken by an interruption that did not resume.
+            resume()
+        } else {
+            Self.activateAudioSession()
             model.connect()
         }
         return .success
     }
 
+    private func resume() {
+        Self.activateAudioSession()
+        model.player.resync()
+    }
+
     private func stop() -> MPRemoteCommandHandlerStatus {
-        if isPlaying { model.disconnect() }
+        if isPlaying {
+            model.disconnect()
+            onUserStop?()
+        }
         return .success
     }
 
