@@ -1,6 +1,7 @@
 import BonDriver
 import ChannelScan
 import Foundation
+import os
 import TSCore
 
 /// Progress of a background programme guide grab.
@@ -81,11 +82,16 @@ extension AppModel {
         let gen = epgGeneration
         epgQueue.async { [weak self] in
             var failure: String?
+            // A lost connection stops the grab like a cancel, but is reported as an error.
+            let connectionError = OSAllocatedUnfairLock<String?>(initialState: nil)
             do {
                 let d = try background.makeDriver()
                 defer { d.release() }
                 d.tsHandler = { grabber.feed($0) }
-                d.errorHandler = { _ in grabber.cancel() }
+                d.errorHandler = { e in
+                    connectionError.withLock { $0 = $0 ?? e.description }
+                    grabber.cancel()
+                }
                 try d.openTuner()
                 try grabber.grab(d, channels: channels) { ev in
                     DispatchQueue.main.async { self?.handleGrabEvent(ev, generation: gen) }
@@ -93,7 +99,8 @@ extension AppModel {
             } catch {
                 failure = String(describing: error)
             }
-            let cancelled = grabber.isCancelled
+            if let lost = connectionError.withLock({ $0 }) { failure = failure ?? lost }
+            let cancelled = grabber.isCancelled && failure == nil
             DispatchQueue.main.async {
                 guard let self, self.epgGeneration == gen else { return }
                 self.epgGrabber = nil

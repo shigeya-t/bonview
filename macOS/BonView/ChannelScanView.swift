@@ -7,6 +7,7 @@ struct ChannelScanView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<UInt32> = []
+    @State private var confirmClear = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -47,7 +48,12 @@ struct ChannelScanView: View {
             .listStyle(.bordered)
             HStack {
                 if !model.scannedChannels.isEmpty {
-                    Button("スキャン結果を消去", role: .destructive) { model.clearScanResult() }
+                    Button("スキャン結果を消去", role: .destructive) { confirmClear = true }
+                        .confirmationDialog("スキャン結果を消去しますか？", isPresented: $confirmClear) {
+                            Button("消去", role: .destructive) { model.clearScanResult() }
+                        } message: {
+                            Text("チャンネル一覧と並び順が空になります。もう一度スキャンするまで選局できません。")
+                        }
                 }
                 Spacer()
                 Button("キャンセル") { dismiss() }.keyboardShortcut(.cancelAction)

@@ -44,6 +44,10 @@ struct ProfileEditor: View {
                 Text("2").tag(UInt8(2))
                 Text("3").tag(UInt8(3))
                 Text("占有 (255)").tag(UInt8(255))
+                // Any other value imported from an .ini: listed so the picker has a matching tag.
+                if ![0, 1, 2, 3, 255].contains(profile.config.channelLock) {
+                    Text("\(profile.config.channelLock)").tag(profile.config.channelLock)
+                }
             }
             Toggle("サーバーにスクランブル解除を要求 (B25)", isOn: $profile.config.requestB25)
                 .help("HaijinW 版 BonDriverProxyEx 用。サーバーの ini も B25=1 のときだけ解除されます。他のサーバーでは無視されます")
