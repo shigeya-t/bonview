@@ -7,8 +7,10 @@
 # (arm64) and the iOS Simulator (arm64). The libraries stay dynamic (one .framework each, embedded
 # in BonView.app/Frameworks) so they can be replaced, as the LGPL requires. Package.swift picks the
 # XCFrameworks up as binary targets for iOS when they exist.
-# As on macOS, configure gets a neutral --prefix (it is embedded in libavutil) and the install is staged
-# with DESTDIR, so no local path ends up in the frameworks.
+# As on macOS, configure gets a neutral --prefix (its command line is embedded in libavutil) and the
+# install is staged with DESTDIR. The compiler is `xcrun --sdk <sdk> clang` rather than --cc/--sysroot
+# paths, so no local path ends up in the frameworks (the host tools built along the way keep using the
+# macOS SDK).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -48,9 +50,7 @@ build_slice() {
   rm -rf "$SRC_DIR/ios-$sdk"
   mkdir -p "$SRC_DIR/ios-$sdk" "$fwdir"
   tar xJf "$TARBALL" -C "$SRC_DIR/ios-$sdk"
-  local sysroot cc version
-  sysroot=$(xcrun --sdk "$sdk" --show-sdk-path)
-  cc=$(xcrun --sdk "$sdk" -f clang)
+  local version
   echo "Building FFmpeg $FFMPEG_VERSION for $sdk…"
   (
     cd "$work"
@@ -58,7 +58,7 @@ build_slice() {
       --prefix=/usr/local \
       --install-name-dir='@rpath' \
       --enable-cross-compile --target-os=darwin --arch=aarch64 \
-      --cc="$cc" --sysroot="$sysroot" \
+      --cc="xcrun --sdk $sdk clang" \
       --enable-shared --disable-static --enable-pic \
       --disable-programs --disable-doc --disable-debug \
       --disable-autodetect --disable-network \
@@ -107,7 +107,8 @@ build_slice() {
 </dict>
 </plist>
 EOF
-    codesign --force --sign - "$fw/$name" >/dev/null 2>&1
+    # Sign the bundle (seals Info.plist and the headers too), ad hoc; Xcode re-signs it when embedding.
+    codesign --force --sign - "$fw" 2>/dev/null || { echo "codesign failed: $fw" >&2; exit 1; }
   done
   rm -rf "$SRC_DIR/ios-$sdk"
 }

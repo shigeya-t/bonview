@@ -28,11 +28,17 @@ public struct AudioComponent: Equatable, Sendable, Codable {
         componentTag = b[2]
         let multiLingual = b[5] & 0x80 != 0
         isMainComponent = b[5] & 0x40 != 0
-        func lang(_ i: Int) -> String { String(decoding: b[i..<(i + 3)], as: UTF8.self) }
+        // ISO 639-2 codes are case-insensitive; keep them lower case so they compare equal.
+        func lang(_ i: Int) -> String { String(decoding: b[i..<(i + 3)], as: UTF8.self).lowercased() }
         languages = [lang(6)]
-        var t = 9
-        if multiLingual, b.count >= 12 { languages.append(lang(9)); t = 12 }
-        text = ARIBString.decode(b[t...])
+        if multiLingual {
+            // A cut-off second code is not text: drop it rather than decoding it as text_char.
+            guard b.count >= 12 else { text = ""; return }
+            languages.append(lang(9))
+            text = ARIBString.decode(b[12...])
+        } else {
+            text = ARIBString.decode(b[9...])
+        }
     }
 
     public var isDualMono: Bool { componentType == 0x02 }
@@ -59,7 +65,7 @@ public struct AudioComponent: Equatable, Sendable, Codable {
     /// streams differ in language, else "音声N".
     public static func labels(for streams: [ElementaryStreamInfo], components: [AudioComponent]) -> [String] {
         let matched = streams.map { s in components.first { s.componentTag != nil && $0.componentTag == s.componentTag } }
-        let langs = matched.map { $0?.languages.first }
+        let langs = matched.map { $0?.languages.first?.lowercased() }
         let languagesDiffer = Set(langs.compactMap { $0 }).count > 1
         return streams.indices.map { i in
             if let c = matched[i] {
@@ -74,7 +80,8 @@ public struct AudioComponent: Equatable, Sendable, Codable {
 
     /// Labels for the 主/副 dual-mono switch, from the two languages when they differ.
     public var dualMonoNames: (main: String, sub: String)? {
-        guard isDualMono, languages.count == 2, languages[0] != languages[1] else { return nil }
+        // Lower-cased here too: guide data saved before parsing normalised the case.
+        guard isDualMono, languages.count == 2, languages[0].lowercased() != languages[1].lowercased() else { return nil }
         return (Self.languageName(languages[0]), Self.languageName(languages[1]))
     }
 }

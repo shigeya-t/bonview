@@ -23,10 +23,38 @@ final class AppModel {
     // MARK: Profiles
     var profiles: [ServerProfile] = Preferences.loadProfiles() {
         didSet {
-            Preferences.saveProfiles(profiles)
+            // Edits of existing servers (every keystroke in the editor) are saved — and sent to iCloud —
+            // once typing pauses; servers added, removed or reordered are saved at once.
+            if applyingCloudProfiles {
+                // Already in UserDefaults (from iCloud): nothing to save, nothing edited here.
+            } else if oldValue.map(\.id) == profiles.map(\.id) {
+                for (old, new) in zip(oldValue, profiles) where old != new { editedProfileIDs.insert(new.id) }
+                scheduleProfilesSave()
+            } else {
+                saveProfilesNow()
+            }
             let removed = Set(oldValue.map(\.id)).subtracting(profiles.map(\.id))
             if !removed.isEmpty { profilesRemoved(removed) }
         }
+    }
+    @ObservationIgnored private var pendingProfilesSave: DispatchWorkItem?
+    /// Servers edited here since the last save (their edits win over iCloud until then).
+    @ObservationIgnored private var editedProfileIDs: Set<UUID> = []
+    @ObservationIgnored private var applyingCloudProfiles = false
+
+    private func scheduleProfilesSave() {
+        pendingProfilesSave?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.saveProfilesNow() }
+        pendingProfilesSave = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
+    /// Writes the server list now (also called before the app quits or moves to the background).
+    func saveProfilesNow() {
+        pendingProfilesSave?.cancel()
+        pendingProfilesSave = nil
+        editedProfileIDs = []
+        Preferences.saveProfiles(profiles)
     }
     var currentProfileID: UUID? = Preferences.currentProfileID {
         didSet { Preferences.currentProfileID = currentProfileID }
@@ -303,6 +331,16 @@ final class AppModel {
         let passive = passiveEPG
         router.set { player.feed($0); passive.feed($0) }
 
+        #if os(macOS)
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.saveProfilesNow()
+            // ⌘Q does not close the window first (no disconnect → saveEPG): save the guide here and
+            // wait for the file to be written before the process exits.
+            self?.saveEPG()
+            Self.epgFileQueue.sync {}
+        }
+        #endif
+
         signalTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.epgTick()
@@ -317,8 +355,19 @@ final class AppModel {
     /// The connection is left alone; a new current server applies from the next connect.
     private func applyCloudChanges(_ keys: Set<String>) {
         if keys.contains("profiles") {
-            let list = Preferences.loadProfiles()
+            var list = Preferences.loadProfiles()
+            let edited = editedProfileIDs
+            if !edited.isEmpty {
+                // Servers edited here and not saved yet keep this device's version; every other
+                // server (and servers added or removed there) comes from the other device.
+                let local = Dictionary(profiles.filter { edited.contains($0.id) }.map { ($0.id, $0) },
+                                       uniquingKeysWith: { a, _ in a })
+                list = list.map { local[$0.id] ?? $0 }
+            }
+            applyingCloudProfiles = true
             if list != profiles { profiles = list }
+            applyingCloudProfiles = false
+            if !edited.isEmpty { saveProfilesNow() }
         }
         if keys.contains("showCaptions") {
             let v = Preferences.bool("showCaptions", default: true)
@@ -440,6 +489,7 @@ final class AppModel {
                 resetEPG(profile: nil)
             }
         }
+        Preferences.recordDeletedProfiles(ids)
         for id in ids { Preferences.removeData(for: id) }
     }
 

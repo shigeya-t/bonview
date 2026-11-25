@@ -22,6 +22,7 @@ extern unsigned avutil_version(void) __attribute__((weak_import));
 extern unsigned avfilter_version(void) __attribute__((weak_import));
 extern unsigned swresample_version(void) __attribute__((weak_import));
 extern unsigned swscale_version(void) __attribute__((weak_import));
+extern const char *av_version_info(void) __attribute__((weak_import));
 
 const char *tv_ffmpeg_missing_libraries(void) {
     static char buf[128];
@@ -39,6 +40,10 @@ const char *tv_ffmpeg_missing_libraries(void) {
         strlcat(buf, libs[i].name, sizeof(buf));
     }
     return buf[0] ? buf : NULL;
+}
+
+const char *tv_ffmpeg_version(void) {
+    return av_version_info ? av_version_info() : NULL;
 }
 
 struct TVDecoder {

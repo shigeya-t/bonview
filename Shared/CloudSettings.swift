@@ -113,15 +113,20 @@ enum CloudSettings {
         sync?.localDidSet(key)
     }
 
-    /// Server lists of two devices: iCloud's entries first, then this device's entries iCloud lacks.
     private static func mergeProfiles(local: Any, cloud: Any) -> Any {
         let decoder = JSONDecoder()
         guard let l = local as? Data, let c = cloud as? Data,
               let localList = try? decoder.decode([ServerProfile].self, from: l),
               let cloudList = try? decoder.decode([ServerProfile].self, from: c) else { return cloud }
-        let ids = Set(cloudList.map(\.id))
-        let merged = cloudList + localList.filter { !ids.contains($0.id) }
+        let merged = mergeProfiles(local: localList, cloud: cloudList, deleted: Preferences.deletedProfileIDs)
         return (try? Preferences.encoder.encode(merged)) ?? cloud
+    }
+
+    /// Server lists of two devices: iCloud's entries first, then this device's entries iCloud lacks,
+    /// without the servers deleted here (e.g. while syncing was off).
+    static func mergeProfiles(local: [ServerProfile], cloud: [ServerProfile], deleted: Set<UUID>) -> [ServerProfile] {
+        let ids = Set(cloud.map(\.id))
+        return (cloud + local.filter { !ids.contains($0.id) }).filter { !deleted.contains($0.id) }
     }
 }
 

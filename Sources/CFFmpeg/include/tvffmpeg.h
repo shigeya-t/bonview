@@ -32,8 +32,12 @@ typedef struct TVDecoder TVDecoder;
 
 /// The FFmpeg libraries are weak-linked. Returns a comma-separated list of the ones that could not
 /// be loaded (e.g. "libavcodec, libavutil"), or NULL when everything is present. Nothing else in this
-/// header may be called unless this returns NULL.
+/// header except tv_ffmpeg_version may be called unless this returns NULL.
 const char *tv_ffmpeg_missing_libraries(void);
+
+/// FFmpeg release of the loaded libavutil (e.g. "9.0.2"), or NULL when it is missing. Safe to call
+/// without FFmpeg.
+const char *tv_ffmpeg_version(void);
 
 /// Create a decoder for the given TS stream_type. Returns NULL if unsupported.
 /// Deinterlacing of interlaced (software-decoded) video with bwdif.

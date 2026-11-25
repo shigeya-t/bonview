@@ -58,6 +58,7 @@ struct BonViewApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background:
+                model.saveProfilesNow()
                 let live = model.state == .connected || model.state == .connecting
                 var file = false
                 if case .playingFile = model.state { file = true }
