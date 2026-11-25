@@ -23,8 +23,7 @@ struct BonViewApp: App {
                 .environment(model)
                 .environment(pip)
                 .onOpenURL { url in
-                    // Opened in place from Files: keep access while the file is read.
-                    _ = url.startAccessingSecurityScopedResource()
+                    // Opened in place from Files (TSFileSource holds the security scope while reading).
                     model.openFile(url)
                 }
                 .onAppear {

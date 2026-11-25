@@ -51,10 +51,8 @@ struct ProfileEditor: View {
         Section("Wake on LAN") {
             Toggle("接続前にマジックパケットを送信", isOn: $profile.config.useMagicPacket)
             Field("MACアドレス") {
-                TextField("MACアドレス", text: Binding(
-                    get: { profile.config.macAddress.map { $0.map { String(format: "%02X", $0) }.joined(separator: "-") } ?? "" },
-                    set: { profile.config.macAddress = ProxyConfig.parseMAC($0) }), prompt: Text("AA-BB-CC-DD-EE-FF"))
-                    .hostKeyboard()
+                MACAddressField(mac: $profile.config.macAddress)
+                    .id(profile.id) // fresh text for each profile
             }
             Field("送信先アドレス") {
                 TextField("送信先アドレス", text: Binding(
@@ -104,6 +102,39 @@ private struct Field<Content: View>: View {
         #else
         content
         #endif
+    }
+}
+
+/// MAC address entry. The text being typed is kept here; the profile only takes a complete
+/// address (or nil when the field is emptied), so partial input is not thrown away.
+private struct MACAddressField: View {
+    @Binding var mac: [UInt8]?
+    @State private var text = ""
+
+    var body: some View {
+        TextField("MACアドレス", text: $text, prompt: Text("AA-BB-CC-DD-EE-FF"))
+            .hostKeyboard()
+            .foregroundStyle(isValid ? Color.primary : Color.red)
+            .onAppear { text = Self.format(mac) }
+            .onChange(of: mac) { _, new in
+                // Changed elsewhere (another profile selected, iCloud): show it unless it is what we typed.
+                if ProxyConfig.parseMAC(text) != new { text = Self.format(new) }
+            }
+            .onChange(of: text) { _, t in
+                if t.trimmingCharacters(in: .whitespaces).isEmpty {
+                    if mac != nil { mac = nil }
+                } else if let m = ProxyConfig.parseMAC(t), m != mac {
+                    mac = m
+                }
+            }
+    }
+
+    private var isValid: Bool {
+        text.trimmingCharacters(in: .whitespaces).isEmpty || ProxyConfig.parseMAC(text) != nil
+    }
+
+    private static func format(_ mac: [UInt8]?) -> String {
+        mac.map { $0.map { String(format: "%02X", $0) }.joined(separator: "-") } ?? ""
     }
 }
 

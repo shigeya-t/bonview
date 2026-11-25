@@ -7,7 +7,10 @@ import UniformTypeIdentifiers
 struct SettingsScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    @State private var importing: Importing?
+    // Kept apart from the presentation flag: the picker resets `isPresented` before it calls
+    // the completion handler, which must still know what was being imported.
+    @State private var importKind: Importing = .config
+    @State private var showImporter = false
     @State private var importError: String?
     @AppStorage("backgroundPlayback") private var backgroundPlayback = true
 
@@ -39,7 +42,7 @@ struct SettingsScreen: View {
                     }
                     .onDelete { model.profiles.remove(atOffsets: $0) }
                     Button("サーバーを追加") { add() }
-                    Button("設定ファイルから読み込む…") { importing = .config }
+                    Button("設定ファイルから読み込む…") { importKind = .config; showImporter = true }
                 } header: {
                     Text("BonDriver サーバー")
                 } footer: {
@@ -92,7 +95,7 @@ struct SettingsScreen: View {
                 CloudSyncSection()
 
                 Section("ファイル") {
-                    Button("TSファイルを再生…") { importing = .tsFile }
+                    Button("TSファイルを再生…") { importKind = .tsFile; showImporter = true }
                 }
 
                 Section {
@@ -107,7 +110,7 @@ struct SettingsScreen: View {
                     Button("完了") { dismiss() }
                 }
             }
-            .fileImporter(isPresented: Binding(get: { importing != nil }, set: { if !$0 { importing = nil } }),
+            .fileImporter(isPresented: $showImporter,
                           allowedContentTypes: importTypes) { result in
                 handleImport(result)
             }
@@ -118,9 +121,9 @@ struct SettingsScreen: View {
     }
 
     private var importTypes: [UTType] {
-        switch importing {
+        switch importKind {
         case .tsFile: return [.mpeg2TransportStream, UTType(filenameExtension: "m2ts") ?? .data, .data]
-        default: return [.data, .plainText, .item]
+        case .config: return [.data, .plainText, .item]
         }
     }
 
@@ -131,16 +134,15 @@ struct SettingsScreen: View {
     }
 
     private func handleImport(_ result: Result<URL, Error>) {
-        let kind = importing
+        let kind = importKind
         do {
             let url = try result.get()
             switch kind {
             case .tsFile:
-                // Played straight from the picked location (security-scoped while the reader runs).
-                _ = url.startAccessingSecurityScopedResource()
+                // Played straight from the picked location (TSFileSource holds the security scope).
                 model.openFile(url)
                 dismiss()
-            default:
+            case .config:
                 model.profiles.append(try ServerProfile.imported(from: url))
             }
         } catch {
