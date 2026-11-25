@@ -26,9 +26,23 @@ func finish(_ code: Int32) -> Never {
     exit(code)
 }
 
+/// To stderr. The throwing write: with SIGPIPE ignored, the old `write(_:)` raises an exception when
+/// stderr has gone away.
+func log(_ msg: String) {
+    try? FileHandle.standardError.write(contentsOf: Data(msg.utf8))
+}
+
 func fail(_ msg: String) -> Never {
-    FileHandle.standardError.write((msg + "\n").data(using: .utf8)!)
+    log(msg + "\n")
     finish(1)
+}
+
+/// Set from the receive thread when the connection fails.
+let lostLock = NSLock()
+nonisolated(unsafe) var lostError: BonDriverError?
+func connectionLost() -> BonDriverError? {
+    lostLock.lock(); defer { lostLock.unlock() }
+    return lostError
 }
 
 // `bdpcat ... -o - | head` must end quietly when the reader goes away, not die of SIGPIPE.
@@ -98,6 +112,7 @@ let client: BonDriver
 do {
     client = useTunnel ? try TunnelClient.connect(config: tunnel) : try ProxyClient.connect(config: config)
     connection = client
+    client.errorHandler = { e in lostLock.lock(); lostError = e; lostLock.unlock() }
     try client.openTuner()
 } catch {
     fail("\(error)")
@@ -109,6 +124,7 @@ if list {
         for c in s.channels { print("    \(c.index): \(c.name)") }
     }
     print("devices: \(client.activeDeviceNum)/\(client.totalDeviceNum)")
+    if let e = connectionLost() { fail("\(e)") }
     finish(0)
 }
 
@@ -116,14 +132,14 @@ if scan {
     let scanner = ChannelScanner()
     client.tsHandler = { scanner.feed($0) }
     let spaces = client.enumerateChannels().filter { space == nil || $0.index == space }
-    let err = FileHandle.standardError
     let found = scanner.scan(client, spaces: spaces) { ev in
         switch ev {
-        case .started(let ch, let i, let total): err.write("\r[\(i + 1)/\(total)] \(ch.name)        ".data(using: .utf8)!)
+        case .started(let ch, let i, let total): log("\r[\(i + 1)/\(total)] \(ch.name)        ")
         case .found, .empty: break
         }
     }
-    err.write("\n".data(using: .utf8)!)
+    log("\n")
+    if let e = scanner.failure ?? connectionLost() { fail("scan stopped: \(e)") }
     for c in found {
         print(String(format: "%@ (%d/%d)  TSID 0x%04X  ONID %@", c.channelName, c.space, c.channel, c.transportStreamID,
                      c.originalNetworkID.map { String(format: "0x%04X", $0) } ?? "-"))
@@ -143,13 +159,14 @@ if scan {
     do {
         try grabber.grab(client, channels: found) { ev in
             switch ev {
-            case .started(let ch, let i, let total): err.write("\r[\(i + 1)/\(total)] EPG \(ch.channelName)        ".data(using: .utf8)!)
+            case .started(let ch, let i, let total): log("\r[\(i + 1)/\(total)] EPG \(ch.channelName)        ")
             case .updates(let u): store.merge(u)
             case .skipped, .locked, .finished: break
             }
         }
     } catch { fail("\(error)") }
-    err.write("\n".data(using: .utf8)!)
+    log("\n")
+    if let e = connectionLost() { fail("\(e)") }
     let f = DateFormatter()
     f.dateFormat = "MM/dd HH:mm"
     f.timeZone = TimeZone(identifier: "Asia/Tokyo")
@@ -204,17 +221,16 @@ case .locked?: fail("channel is locked by another client")
 case nil: fail("SetChannel(\(space), \(channel)) failed")
 }
 
-let log = FileHandle.standardError
 let start = Date()
 while seconds <= 0 || Date().timeIntervalSince(start) < seconds {
     sleep(1)
     lock.lock(); let bytes = total; let reason = stopReason; lock.unlock()
-    if let reason { log.write("\n".data(using: .utf8)!); fail(reason) }
+    if let reason { log("\n"); fail(reason) }
     let elapsed = Date().timeIntervalSince(start)
-    log.write(String(format: "\r%6.1fs  %8.2f MB  %.2f Mbps  signal %.2f dB ",
-                     elapsed, Double(bytes) / 1e6, Double(bytes) * 8 / elapsed / 1e6, client.signalLevel).data(using: .utf8)!)
+    log(String(format: "\r%6.1fs  %8.2f MB  %.2f Mbps  signal %.2f dB ",
+               elapsed, Double(bytes) / 1e6, Double(bytes) * 8 / elapsed / 1e6, client.signalLevel))
 }
-log.write("\n".data(using: .utf8)!)
+log("\n")
 
 if info {
     demuxQueue.sync {

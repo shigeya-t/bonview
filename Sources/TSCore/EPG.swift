@@ -245,7 +245,7 @@ public final class EPGCollector: @unchecked Sendable {
     private var progress = EITScheduleProgress()
     private var _actualTSID: UInt16?
     private var _time: Date?
-    private var _lastNewSchedule: Date?
+    private var _lastNewSchedule: TimeInterval?
 
     private struct SectionID: Hashable {
         var pid: UInt16, tableID: UInt8, serviceID: UInt16, tsid: UInt16, onid: UInt16, section: UInt8
@@ -289,17 +289,22 @@ public final class EPGCollector: @unchecked Sendable {
 
     /// Forget everything, including the sections already seen and the collected events (the guide
     /// was cleared, or another server is used): what arrives next is collected again.
+    /// Synchronous (unlike `resetStream`): data queued before the call is processed and dropped
+    /// first, so none of it reaches `takeUpdates` afterwards (e.g. the previous server's guide).
     public func resetAll() {
         queue.sync {
             splitter.reset()
             sections.removeAll()
+            lastCC.removeAll()
             seen.removeAll()
             hEITServices.removeAll()
-            updates = EPGStore()
-            progress = EITScheduleProgress()
-            _actualTSID = nil
-            _time = nil
-            _lastNewSchedule = nil
+            locked {
+                updates = EPGStore()
+                progress = EITScheduleProgress()
+                _actualTSID = nil
+                _time = nil
+                _lastNewSchedule = nil
+            }
         }
     }
 
@@ -309,8 +314,9 @@ public final class EPGCollector: @unchecked Sendable {
     /// TSID of the stream, from EIT p/f actual.
     public var actualTransportStreamID: UInt16? { locked { _actualTSID } }
     public var broadcastTime: Date? { locked { _time } }
-    /// When a basic schedule section not seen before last arrived (since `resetStream`).
-    public var lastNewScheduleSection: Date? { locked { _lastNewSchedule } }
+    /// When a basic schedule section not seen before last arrived (since `resetStream`), in
+    /// `ProcessInfo.systemUptime` seconds (unaffected by clock changes).
+    public var lastNewScheduleSection: TimeInterval? { locked { _lastNewSchedule } }
 
     public func isComplete(originalNetworkID: UInt16?, transportStreamID: UInt16, serviceID: UInt16) -> Bool {
         locked { progress.isComplete(originalNetworkID: originalNetworkID, transportStreamID: transportStreamID, serviceID: serviceID) }
@@ -352,7 +358,7 @@ public final class EPGCollector: @unchecked Sendable {
             guard let eit = EIT(s) else { return }
             lock.lock()
             updates.apply(eit)
-            if progress.record(eit) { _lastNewSchedule = Date() }
+            if progress.record(eit) { _lastNewSchedule = ProcessInfo.processInfo.systemUptime }
             lock.unlock()
         default:
             break

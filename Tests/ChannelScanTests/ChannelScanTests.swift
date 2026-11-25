@@ -13,6 +13,8 @@ final class FakeDriver: BonDriver, @unchecked Sendable {
     private var generation = 0
     private var current: UInt32?
     private(set) var tuned: [UInt32] = []
+    /// From this many SetChannel calls on, fail as a lost connection would.
+    var disconnectAfter: Int?
 
     init(streams: [UInt32: Data]) { self.streams = streams }
 
@@ -36,7 +38,9 @@ final class FakeDriver: BonDriver, @unchecked Sendable {
         let gen = generation
         current = channel
         tuned.append(channel)
+        let lost = disconnectAfter.map { tuned.count > $0 } ?? false
         lock.unlock()
+        if lost { throw BonDriverError.disconnected }
         guard let data = streams[channel] else { return .tuned }
         Thread.detachNewThread { [weak self] in
             while let self {
@@ -110,6 +114,18 @@ final class FakeDriver: BonDriver, @unchecked Sendable {
         scanner.cancel()
         #expect(scanner.scan(driver, spaces: driver.enumerateChannels()).isEmpty)
         #expect(driver.tuned.isEmpty)
+    }
+
+    @Test func lostConnectionStopsTheScan() {
+        let driver = FakeDriver(streams: [:])
+        driver.disconnectAfter = 1
+        var options = ChannelScanner.Options()
+        options.noSignalTimeout = 0.1
+        let scanner = ChannelScanner(options: options)
+        #expect(scanner.scan(driver, spaces: driver.enumerateChannels()).isEmpty)
+        // Channel 0 was tried, channel 1 failed; channels 2 and 3 were not tried.
+        #expect(driver.tuned == [0, 1])
+        if case .disconnected? = scanner.failure {} else { Issue.record("failure: \(String(describing: scanner.failure))") }
     }
 
     @Test func threeDigitNumbers() {
