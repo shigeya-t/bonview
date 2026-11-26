@@ -3,6 +3,9 @@ import MediaCore
 import MediaPlayer
 import TSCore
 import UIKit
+import os
+
+private let audioLog = Logger(subsystem: "BonView", category: "audio-session")
 
 /// Audio session, Control Center / lock screen "Now Playing" and remote commands (headphones,
 /// Control Center, CarPlay-style controls).
@@ -69,6 +72,7 @@ final class NowPlaying {
         observers.append(nc.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] n in
             let reason = (n.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt).flatMap(AVAudioSession.RouteChangeReason.init)
             MainActor.assumeIsolated {
+                audioLog.info("route change reason=\(reason?.rawValue ?? 999, privacy: .public) outputs=\(AVAudioSession.sharedInstance().currentRoute.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ","), privacy: .public)")
                 guard let self else { return }
                 // Headphones unplugged / Bluetooth gone: stop rather than play out of the speaker.
                 if reason == .oldDeviceUnavailable, self.isPlaying {
