@@ -253,12 +253,14 @@ struct ControlBar: View {
     var onInteraction: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 4) {
+        // Buttons shrink from 44 to 28 points so the bar fits a narrow iPhone (393 points) in portrait.
+        HStack(spacing: 0) {
             button("前のチャンネル", "chevron.up") { model.stepChannel(-1) }
                 .disabled(model.spaces.isEmpty)
             button("次のチャンネル", "chevron.down") { model.stepChannel(1) }
                 .disabled(model.spaces.isEmpty)
-            Spacer(minLength: 4)
+            playStopButton
+            Spacer(minLength: 0)
             button(model.isMuted ? "消音を解除" : "消音", model.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill") {
                 model.isMuted.toggle()
             }
@@ -273,7 +275,7 @@ struct ControlBar: View {
                     .disabled(!pip.isPossible && !pip.isActive)
             }
             AirPlayButton()
-                .frame(width: 40, height: 40)
+                .frame(minWidth: Self.minButtonWidth, idealWidth: 40, maxWidth: 44, minHeight: 40, maxHeight: 40)
                 .accessibilityLabel("AirPlay")
             button("番組表", model.isGrabbingEPG ? "calendar.badge.clock" : "calendar") { sheet = .guide }
             button("設定", "gearshape") { sheet = .settings }
@@ -294,10 +296,31 @@ struct ControlBar: View {
             Label(label, systemImage: symbol)
                 .labelStyle(.iconOnly)
                 .font(.title3)
-                .frame(width: 40, height: 40)
+                .frame(minWidth: Self.minButtonWidth, idealWidth: 40, maxWidth: 44, minHeight: 40, maxHeight: 40)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
+    }
+
+    private static let minButtonWidth: CGFloat = 28
+
+    private var isPlaying: Bool {
+        switch model.state {
+        case .connecting, .connected, .playingFile: return true
+        case .idle, .failed: return false
+        }
+    }
+
+    /// Live TV cannot pause: stop releases the stream (and the tuner), play connects again.
+    private var playStopButton: some View {
+        button(isPlaying ? "停止" : "再生", isPlaying ? "stop.fill" : "play.fill") {
+            if isPlaying {
+                model.disconnect()
+            } else {
+                model.connect()
+            }
+        }
+        .disabled(!isPlaying && model.currentProfile == nil)
     }
 }
 

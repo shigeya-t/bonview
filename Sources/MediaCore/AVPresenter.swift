@@ -54,7 +54,10 @@ public final class AVPresenter: @unchecked Sendable {
         // and interruptions. Re-anchor so the clock does not run on without audio.
         flushObserver = NotificationCenter.default.addObserver(
             forName: .AVSampleBufferAudioRendererWasFlushedAutomatically, object: audioRenderer, queue: nil
-        ) { [weak self] _ in self?.reanchor() }
+        ) { [weak self] n in
+            let time = (n.userInfo?[AVSampleBufferAudioRendererFlushTimeKey] as? NSValue)?.timeValue
+            self?.automaticallyFlushed(at: time)
+        }
     }
 
     deinit {
@@ -68,6 +71,25 @@ public final class AVPresenter: @unchecked Sendable {
     private func reanchor() {
         lock.lock(); needsReanchor = true; lock.unlock()
     }
+
+    /// An automatic flush. AirPlay reports these late and also after our own flush / rate change
+    /// (channel change): re-anchoring for those flushed again and could loop, leaving the audio
+    /// silent. Ignore flushes from before the current anchor, and re-anchor at most once every few
+    /// seconds; audio enqueued afterwards plays anyway, a skipped re-anchor only costs a short gap.
+    private func automaticallyFlushed(at time: CMTime?) {
+        lock.lock(); defer { lock.unlock() }
+        guard anchored else { return }
+        if let time, time.isNumeric, let start = anchorTime, time.seconds < start - 0.1 { return }
+        let uptime = ProcessInfo.processInfo.systemUptime
+        if let last = lastAutoReanchor, uptime - last < Self.autoReanchorInterval { return }
+        lastAutoReanchor = uptime
+        needsReanchor = true
+    }
+
+    private static let autoReanchorInterval: TimeInterval = 5
+    /// Media time the clock started from at the last anchor.
+    private var anchorTime: Double?
+    private var lastAutoReanchor: TimeInterval?
 
     public var volume: Float {
         get { audioRenderer.volume }
@@ -122,6 +144,7 @@ public final class AVPresenter: @unchecked Sendable {
         if anchored { return }
         if hasAudio && !isAudio { return }
         anchored = true
+        anchorTime = t - _latency
         synchronizer.setRate(1, time: CMTime(seconds: t - _latency, preferredTimescale: 90000))
     }
 
